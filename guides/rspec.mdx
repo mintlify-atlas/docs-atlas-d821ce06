@@ -1,0 +1,323 @@
+---
+title: RSpec Integration
+description: Complete guide to using FixtureKit with RSpec
+---
+
+FixtureKit provides seamless integration with RSpec through automatic configuration and a clean DSL for declaring fixtures in your test suites.
+
+## Installation
+
+FixtureKit automatically configures itself for RSpec when you require it:
+
+```ruby
+# spec/rails_helper.rb or spec/spec_helper.rb
+require "fixture_kit/rspec"
+```
+
+The integration automatically:
+- Sets the default fixture path to `spec/fixture_kit`
+- Configures the RSpec adapter
+- Extends RSpec example groups with the `fixture` macro
+- Includes fixture instance methods in all examples
+
+## Basic Usage
+
+### Named Fixtures
+
+Declare a fixture by name in your describe or context block:
+
+```ruby
+RSpec.describe User do
+  fixture "teams/basic"
+
+  it "has users" do
+    expect(fixture.alice).to be_present
+    expect(fixture.alice.email).to eq("alice@team.test")
+  end
+end
+```
+
+The fixture file would be located at `spec/fixture_kit/teams/basic.rb`:
+
+```ruby
+# spec/fixture_kit/teams/basic.rb
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@team.test", role: "admin")
+  bob = User.create!(name: "Bob", email: "bob@team.test")
+
+  expose(
+    alice: alice,
+    bob: bob
+  )
+end
+```
+
+### Anonymous Fixtures
+
+Define fixtures inline using a block:
+
+```ruby
+RSpec.describe "User analytics" do
+  fixture do
+    user = User.create!(name: "Test User", email: "test@example.com")
+    expose(user: user)
+  end
+
+  it "tracks user activity" do
+    expect(fixture.user.name).to eq("Test User")
+  end
+end
+```
+
+Anonymous fixtures are cached in the `_anonymous` directory with a path derived from the example group's class name.
+
+## Fixture Declaration
+
+### Class-Level Declaration
+
+The `fixture` method is available in all RSpec example groups:
+
+```ruby
+RSpec.describe Project do
+  fixture "project_management"
+
+  it "has projects" do
+    expect(fixture.web_app.name).to eq("Web App Redesign")
+    expect(fixture.mobile_app.name).to eq("Mobile App")
+  end
+end
+```
+
+### Nested Context Overrides
+
+Fixture declarations can be overridden in nested contexts, similar to RSpec's `let`:
+
+```ruby
+RSpec.describe User do
+  fixture "teams/basic"
+
+  it "has basic team members" do
+    expect(User.count).to eq(2)
+  end
+
+  context "with additional users" do
+    fixture "project_management"  # Override parent fixture
+
+    it "has project team members" do
+      expect(User.count).to eq(3)
+      expect(fixture.alice.name).to eq("Alice Chen")
+    end
+  end
+end
+```
+
+### Fixture Inheritance
+
+Extend existing fixtures to build on their data:
+
+```ruby
+RSpec.describe Task do
+  fixture(extends: "teams/basic") do
+    project = Project.create!(name: "New Project", owner: parent.alice)
+    task = Task.create!(title: "Build feature", project: project)
+
+    expose(
+      project: project,
+      task: task
+    )
+  end
+
+  it "creates tasks with inherited users" do
+    expect(fixture.task.project.owner).to eq(fixture.parent.alice)
+    expect(User.count).to eq(2)  # From parent fixture
+    expect(Project.count).to eq(1)
+  end
+end
+```
+
+Access parent fixture data through the `parent` method.
+
+## Accessing Fixtures
+
+The `fixture` instance method is available in all RSpec examples:
+
+```ruby
+RSpec.describe Project do
+  fixture "project_management"
+
+  it "exposes individual records" do
+    expect(fixture.alice.name).to eq("Alice Chen")
+    expect(fixture.web_app.status).to eq("active")
+  end
+
+  it "exposes arrays" do
+    expect(fixture.mobile_tasks).to be_an(Array)
+    expect(fixture.mobile_tasks.size).to eq(3)
+  end
+
+  it "returns database records" do
+    expect(fixture.alice).to be_a(User)
+    expect(fixture.alice).to be_persisted
+  end
+end
+```
+
+Calling `fixture` without a declaration raises an error:
+
+```ruby
+RSpec.describe "No fixture" do
+  it "raises helpful error" do
+    expect { fixture }.to raise_error(
+      "No fixture declared for this example group. Use `fixture \"name\"` in your describe/context block."
+    )
+  end
+end
+```
+
+## Transactional Fixtures
+
+<Warning>
+FixtureKit requires RSpec's `use_transactional_fixtures` to be enabled. This ensures that database changes in each example are rolled back.
+</Warning>
+
+In your RSpec configuration:
+
+```ruby
+# spec/rails_helper.rb
+RSpec.configure do |config|
+  config.use_transactional_fixtures = true
+end
+```
+
+Fixtures are loaded **before** transactional rollback begins, so they persist across all examples using the same fixture declaration.
+
+## Execution Order
+
+FixtureKit fixtures are loaded in a specific order to ensure consistency:
+
+<Steps>
+  <Step title="Suite start">
+    The runner starts and clears the cache directory (unless `FIXTURE_KIT_PRESERVE_CACHE` is set)
+  </Step>
+
+  <Step title="Before context hooks">
+    The fixture is generated and cached (if not already cached)
+  </Step>
+
+  <Step title="Before each example">
+    The cached fixture data is mounted into the database **before** user-defined `before` hooks run
+  </Step>
+
+  <Step title="User before hooks">
+    Your `before` blocks execute with fixture data already loaded
+  </Step>
+
+  <Step title="Example execution">
+    Your test runs with fixture data available via `fixture.method_name`
+  </Step>
+
+  <Step title="After context hooks">
+    Anonymous fixtures have their in-memory cache cleared
+  </Step>
+</Steps>
+
+```ruby
+RSpec.describe User do
+  fixture "teams/basic"
+
+  before do
+    @user_count = User.count
+  end
+
+  it "has fixtures loaded before hooks" do
+    expect(@user_count).to eq(2)  # Fixtures already loaded!
+  end
+end
+```
+
+## Using Helper Methods
+
+Anonymous fixtures can access RSpec helper methods during generation:
+
+```ruby
+RSpec.describe "Time-dependent data" do
+  include ActiveSupport::Testing::TimeHelpers
+
+  fixture do
+    travel_to(Time.zone.parse("2024-01-01 12:00:00")) do
+      user = User.create!(name: "Time User", email: "time@example.com")
+      expose(time_user: user)
+    end
+  end
+
+  it "creates records at specific times" do
+    expect(fixture.time_user.created_at).to eq(Time.zone.parse("2024-01-01 12:00:00"))
+  end
+end
+```
+
+## Shared Examples
+
+Fixtures work with RSpec shared examples:
+
+```ruby
+RSpec.shared_examples "user fixtures" do
+  it "has alice" do
+    expect(fixture.alice).to be_present
+    expect(fixture.alice.email).to eq("alice@team.test")
+  end
+end
+
+RSpec.describe "Feature A" do
+  fixture "teams/basic"
+  include_examples "user fixtures"
+end
+
+RSpec.describe "Feature B" do
+  fixture "teams/basic"
+  include_examples "user fixtures"
+end
+```
+
+## Configuration
+
+Customize the fixture path in your RSpec configuration:
+
+```ruby
+# spec/rails_helper.rb
+RSpec.configure do |config|
+  config.fixture_kit.configuration.fixture_path = "spec/fixtures"
+  config.fixture_kit.configuration.cache_path = "tmp/fixture_cache"
+end
+```
+
+See the [Configuration](/guides/configuration) guide for all available options.
+
+## Multiple Fixtures Error
+
+<Warning>
+You cannot declare multiple fixtures in the same example group. Each group can have only one fixture declaration.
+</Warning>
+
+```ruby
+RSpec.describe "Invalid" do
+  fixture "teams/basic"
+  fixture "project_management"  # Raises FixtureKit::MultipleFixtures!
+end
+```
+
+Use nested contexts to test with different fixtures:
+
+```ruby
+RSpec.describe User do
+  context "with basic team" do
+    fixture "teams/basic"
+    # tests...
+  end
+
+  context "with project team" do
+    fixture "project_management"
+    # tests...
+  end
+end
+```

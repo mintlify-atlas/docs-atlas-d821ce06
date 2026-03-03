@@ -1,0 +1,437 @@
+---
+title: "Performance Guide"
+description: "Best practices for maximizing FixtureKit's speed benefits"
+---
+
+## Performance Benefits
+
+FixtureKit gives you fixture-level performance without giving up factory_bot-style test setup. The key speedup comes from replacing expensive factory logic with cached SQL replay.
+
+### What Makes Factories Slow
+
+Every `create(:user)` call with factory_bot:
+
+1. Instantiates a new Ruby object
+2. Runs all factory callbacks (before/after create)
+3. Triggers ActiveRecord validations
+4. Fires ActiveRecord callbacks (before/after validation, save, create, commit)
+5. Processes associations (which recursively do steps 1-4)
+6. Executes individual INSERT statements for each record
+
+For complex factory graphs, this compounds quickly. A single `create(:order)` might trigger 20+ factory instantiations and 50+ SQL queries.
+
+### What Makes FixtureKit Fast
+
+After the first run, FixtureKit:
+
+1. Reads cached SQL from a JSON file
+2. Executes a batch of INSERT statements
+3. Returns a repository of lazy-loaded records
+
+No Ruby object instantiation. No validations. No callbacks. Just raw SQL replay.
+
+<Tip>
+  The speedup scales with fixture reuse. A fixture used in 10 tests means 9 saved factory runs. One used in 100 tests means 99 saved runs.
+</Tip>
+
+## When to Use Fixtures vs Factories
+
+### Use FixtureKit for
+
+<CardGroup cols={2}>
+  <Card title="Shared test context" icon="users">
+    Data reused across multiple examples in the same file or across files
+  </Card>
+  
+  <Card title="Complex object graphs" icon="diagram-project">
+    Models with deep association trees (user → company → plan → features)
+  </Card>
+  
+  <Card title="Read-only data" icon="book">
+    Records that tests only read from, not modify
+  </Card>
+  
+  <Card title="Baseline state" icon="house">
+    Common setup shared by many tests (default user, admin account, etc.)
+  </Card>
+</CardGroup>
+
+### Use factory_bot for
+
+<CardGroup cols={2}>
+  <Card title="One-off data" icon="file">
+    Records used in only one test and not reused
+  </Card>
+  
+  <Card title="Test-specific variations" icon="sliders">
+    When each test needs slightly different record attributes
+  </Card>
+  
+  <Card title="Modified records" icon="pen-to-square">
+    When tests update or delete the record (factories work better in isolation)
+  </Card>
+  
+  <Card title="Simple objects" icon="circle">
+    Models with no associations where factory overhead is minimal
+  </Card>
+</CardGroup>
+
+### Hybrid Approach
+
+The best performance comes from combining both tools:
+
+```ruby
+RSpec.describe Order do
+  # FixtureKit for shared context
+  fixture "orders/base_context"
+  
+  it "creates order for existing user" do
+    # Use fixture for the expensive shared setup
+    user = fixture.user
+    company = fixture.company
+    
+    # Use factory for the test-specific record
+    order = create(:order, user: user, company: company)
+    
+    expect(order.user).to eq(user)
+  end
+end
+```
+
+<Note>
+  This pattern works well: FixtureKit for the expensive "world setup" (users, companies, teams) and factories for the specific records being tested (orders, events, reports).
+</Note>
+
+## Maximizing Speed Gains
+
+### 1. Identify High-Reuse Lets
+
+Use the [Analyzer tool](/advanced/analyzer) to find factory lets used in many examples:
+
+```bash
+rspec --dry-run --require fixture_kit/analyzer spec/
+```
+
+Prioritize converting lets with `example_count >= 10`.
+
+### 2. Consolidate Related Fixtures
+
+Instead of multiple small fixtures:
+
+```ruby
+# Slower: Multiple small fixtures
+fixture "users/admin"
+fixture "users/manager" 
+fixture "users/employee"
+```
+
+Create one comprehensive fixture:
+
+```ruby
+# Faster: One consolidated fixture
+fixture "users/roles"
+
+# In spec/fixture_kit/users/roles.rb
+FixtureKit.define do
+  admin = User.create!(name: "Admin", role: "admin")
+  manager = User.create!(name: "Manager", role: "manager")
+  employee = User.create!(name: "Employee", role: "employee")
+  
+  expose(admin: admin, manager: manager, employee: employee)
+end
+```
+
+Benefits:
+- One cache file instead of three
+- One cache load instead of three
+- Less file I/O overhead
+
+### 3. Use Fixture Composition
+
+Build on existing fixtures with `extends` to avoid duplication:
+
+```ruby
+# Base fixture
+FixtureKit.define "teams/basic" do
+  owner = User.create!(name: "Alice")
+  team = Team.create!(name: "Engineering", owner: owner)
+  
+  expose(owner: owner, team: team)
+end
+
+# Extended fixture builds on basic
+FixtureKit.define "teams/with_members" do
+  extends "teams/basic"
+  
+  member1 = User.create!(name: "Bob")
+  member2 = User.create!(name: "Carol")
+  
+  team.members << member1
+  team.members << member2
+  
+  expose(member1: member1, member2: member2)
+end
+```
+
+The `with_members` fixture automatically includes `owner` and `team` from `basic`.
+
+### 4. Design for Reuse
+
+Create fixtures that work for multiple test scenarios:
+
+```ruby
+# Good: Generic fixture reusable across many tests
+FixtureKit.define "projects/standard" do
+  owner = User.create!(name: "Owner", email: "owner@example.com")
+  project = Project.create!(name: "Project Alpha", owner: owner, status: "active")
+  
+  expose(owner: owner, project: project)
+end
+```
+
+```ruby
+# Less ideal: Too specific, only useful for one test
+FixtureKit.define "projects/completed_with_overdue_tasks" do
+  # Very specific scenario, hard to reuse
+end
+```
+
+### 5. Preserve Cache During Development
+
+When iterating on tests (not fixture definitions), preserve the cache:
+
+```bash
+# Faster during development
+FIXTURE_KIT_PRESERVE_CACHE=1 rspec spec/models/order_spec.rb
+```
+
+<Warning>
+  Only use `FIXTURE_KIT_PRESERVE_CACHE=1` when you're confident fixtures and schema haven't changed. Clear cache when changing fixture definitions.
+</Warning>
+
+### 6. Lazy Load Exposed Records
+
+FixtureKit only loads exposed records when you access them:
+
+```ruby
+fixture "teams/with_members"
+
+it "uses only what it needs" do
+  # Only loads 'owner' from database, not member1 or member2
+  expect(fixture.owner.name).to eq("Alice")
+end
+```
+
+This means you can expose many records without performance penalty if tests only use a subset.
+
+## Benchmarking
+
+### Measure Fixture Generation Time
+
+Use callbacks to track how long fixtures take to generate:
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_saved do |identifier, duration|
+    puts "Generated #{identifier} in #{duration.round(2)}s"
+  end
+  
+  config.on_cache_mounted do |identifier, duration|
+    puts "Loaded #{identifier} in #{duration.round(4)}s"
+  end
+end
+```
+
+From lib/fixture_kit/fixture.rb:57:
+
+```ruby
+elapsed = Benchmark.realtime do
+  value = yield
+end
+configuration.callbacks.run(event, cache_identifier, elapsed)
+```
+
+### Compare Factory vs Fixture Times
+
+Create a simple benchmark:
+
+```ruby
+require "benchmark"
+
+# Measure factory time
+factory_time = Benchmark.realtime do
+  10.times { create(:user, :with_company, :with_projects) }
+end
+
+# Measure fixture time (after cache generated)
+fixture_time = Benchmark.realtime do
+  10.times { fixture("users/full_context").user }
+end
+
+puts "Factory: #{factory_time.round(2)}s"
+puts "Fixture: #{fixture_time.round(4)}s"
+puts "Speedup: #{(factory_time / fixture_time).round(1)}x"
+```
+
+<Tip>
+  Typical speedups range from 5-50x depending on factory complexity. Complex multi-association factories see the biggest gains.
+</Tip>
+
+## Fixture Reuse Across Tests
+
+FixtureKit fixtures are loaded fresh for each test via transaction rollback:
+
+```ruby
+RSpec.describe "Fixture isolation" do
+  fixture "users/basic"
+  
+  it "test 1 modifies user" do
+    fixture.user.update!(name: "Modified")
+    expect(fixture.user.name).to eq("Modified")
+  end
+  
+  it "test 2 sees fresh user" do
+    # Rollback restores original state
+    expect(fixture.user.name).to eq("Alice") # Original name from fixture
+  end
+end
+```
+
+Each test gets a clean copy via database transaction rollback, not by regenerating the fixture.
+
+<Note>
+  This requires `use_transactional_fixtures = true` (RSpec) or `use_transactional_tests = true` (Minitest). FixtureKit depends on transactional test isolation.
+</Note>
+
+## Optimizing Fixture Definitions
+
+### Minimize Association Depth
+
+Deep association chains slow down generation:
+
+```ruby
+# Slower: Deep nesting creates many records
+order = create(:order)  # Creates order → line_items → products → categories → ...
+```
+
+```ruby
+# Faster: Create only what you need
+FixtureKit.define do
+  product = Product.create!(name: "Widget")
+  order = Order.create!(status: "pending")
+  LineItem.create!(order: order, product: product, quantity: 1)
+  
+  expose(order: order, product: product)
+end
+```
+
+### Use Direct SQL for Bulk Data
+
+For fixtures that need many similar records, consider raw SQL:
+
+```ruby
+FixtureKit.define do
+  # Create one via ActiveRecord to ensure schema compatibility
+  template = User.create!(name: "Template", email: "template@example.com")
+  
+  # Bulk insert for the rest (only if you need many)
+  100.times do |i|
+    User.connection.execute(
+      "INSERT INTO users (name, email, created_at, updated_at) " \
+      "VALUES ('User #{i}', 'user#{i}@example.com', NOW(), NOW())"
+    )
+  end
+  
+  expose(template: template)
+end
+```
+
+<Warning>
+  Raw SQL bypasses validations and callbacks. Only use for fixtures where you control the data and know it's valid.
+</Warning>
+
+## Performance Anti-Patterns
+
+### Don't Over-Fixture
+
+```ruby
+# Bad: Creating fixture for single-use data
+fixture { User.create!(name: "One-time user"); expose(user: user) }
+
+it "deletes user" do
+  fixture.user.destroy
+  # ...
+end
+```
+
+```ruby
+# Better: Just use a factory
+it "deletes user" do
+  user = create(:user)
+  user.destroy
+  # ...
+end
+```
+
+Fixtures have overhead (cache I/O, JSON parsing). Don't use them for one-off data.
+
+### Don't Create Unused Data
+
+```ruby
+# Bad: Fixture creates 10 records but tests only use 2
+FixtureKit.define do
+  10.times { |i| User.create!(name: "User #{i}") }
+  # Only expose 2
+  expose(user1: User.first, user2: User.second)
+end
+```
+
+```ruby  
+# Better: Create only what's exposed
+FixtureKit.define do
+  user1 = User.create!(name: "Alice")
+  user2 = User.create!(name: "Bob")
+  
+  expose(user1: user1, user2: user2)
+end
+```
+
+### Don't Nest Fixtures in Loops
+
+```ruby
+# Bad: Loading fixture repeatedly
+100.times do
+  RSpec.describe "Test #{i}" do
+    fixture "users/basic"  # Cache load happens 100 times
+  end
+end
+```
+
+```ruby
+# Better: Share fixture across examples
+RSpec.describe "Tests" do
+  fixture "users/basic"  # Cache load happens once
+  
+  100.times do |i|
+    it "test #{i}" do
+      # All share the same fixture
+    end
+  end
+end
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Analyzer Tool" icon="chart-line" href="/advanced/analyzer">
+    Find high-ROI optimization targets in your test suite
+  </Card>
+  
+  <Card title="Caching System" icon="database" href="/advanced/caching">
+    Understand how FixtureKit's caching works
+  </Card>
+  
+  <Card title="Troubleshooting" icon="wrench" href="/advanced/troubleshooting">
+    Debug performance issues and optimize further
+  </Card>
+</CardGroup>

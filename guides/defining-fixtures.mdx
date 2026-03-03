@@ -1,0 +1,420 @@
+---
+title: Defining Fixtures
+description: Learn how to create and organize fixture definitions in FixtureKit
+---
+
+FixtureKit fixtures are defined using the `FixtureKit.define` method, which creates a reusable snapshot of your database state.
+
+## Basic Fixture Definition
+
+Fixtures are defined in Ruby files using `FixtureKit.define`:
+
+```ruby
+# spec/fixture_kit/teams/basic.rb (RSpec)
+# test/fixture_kit/teams/basic.rb (Minitest)
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@team.test", role: "admin")
+  bob = User.create!(name: "Bob", email: "bob@team.test")
+
+  expose(
+    alice: alice,
+    bob: bob
+  )
+end
+```
+
+The block is executed once during fixture generation, and all database operations are captured and cached.
+
+## The expose() Method
+
+The `expose` method makes records accessible in your tests via the `fixture` helper:
+
+```ruby
+FixtureKit.define do
+  user = User.create!(name: "Alice", email: "alice@example.com")
+  project = Project.create!(name: "Web App", owner: user)
+
+  # Expose records by name
+  expose(
+    user: user,
+    project: project
+  )
+end
+```
+
+In your tests:
+
+```ruby
+fixture "my_fixture"
+
+it "accesses exposed records" do
+  expect(fixture.user.name).to eq("Alice")
+  expect(fixture.project.name).to eq("Web App")
+end
+```
+
+### Exposing Multiple Records
+
+Expose as many records as needed:
+
+```ruby
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")
+  bob = User.create!(name: "Bob", email: "bob@example.com")
+  charlie = User.create!(name: "Charlie", email: "charlie@example.com")
+
+  project = Project.create!(name: "Web App", owner: alice)
+  task = Task.create!(title: "Build API", project: project, assignee: bob)
+
+  expose(
+    alice: alice,
+    bob: bob,
+    charlie: charlie,
+    project: project,
+    task: task
+  )
+end
+```
+
+### Exposing Arrays
+
+Expose arrays of records:
+
+```ruby
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")
+  project = Project.create!(name: "Mobile App", owner: alice)
+
+  # Create multiple tasks
+  tasks = 5.times.map do |i|
+    Task.create!(title: "Task #{i + 1}", project: project)
+  end
+
+  expose(
+    alice: alice,
+    project: project,
+    tasks: tasks  # Expose as array
+  )
+end
+```
+
+Access array elements in tests:
+
+```ruby
+it "accesses array of records" do
+  expect(fixture.tasks).to be_an(Array)
+  expect(fixture.tasks.size).to eq(5)
+  expect(fixture.tasks.first.title).to eq("Task 1")
+end
+```
+
+### Duplicate Name Error
+
+<Warning>
+You cannot expose the same name twice in a single fixture. This will raise a `FixtureKit::DuplicateNameError`.
+</Warning>
+
+```ruby
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")
+  expose(user: alice)
+
+  bob = User.create!(name: "Bob", email: "bob@example.com")
+  expose(user: bob)  # Raises DuplicateNameError: Name user already exposed
+end
+```
+
+Use unique names for each exposed record:
+
+```ruby
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")
+  bob = User.create!(name: "Bob", email: "bob@example.com")
+
+  expose(
+    alice: alice,
+    bob: bob
+  )
+end
+```
+
+## Named vs Anonymous Fixtures
+
+### Named Fixtures
+
+Named fixtures are defined in files and referenced by name:
+
+```ruby
+# spec/fixture_kit/project_management.rb
+FixtureKit.define do
+  alice = User.create!(name: "Alice Chen", email: "alice@example.com", role: "admin")
+  web_app = Project.create!(name: "Web App Redesign", owner: alice, status: "active")
+
+  expose(
+    alice: alice,
+    web_app: web_app
+  )
+end
+```
+
+Used in tests:
+
+```ruby
+RSpec.describe Project do
+  fixture "project_management"  # References file by name
+
+  it "works" do
+    expect(fixture.web_app).to be_present
+  end
+end
+```
+
+### Anonymous Fixtures
+
+Anonymous fixtures are defined inline in test files:
+
+```ruby
+RSpec.describe "User registration" do
+  fixture do
+    user = User.create!(name: "Test User", email: "test@example.com")
+    expose(user: user)
+  end
+
+  it "creates user" do
+    expect(fixture.user).to be_present
+  end
+end
+```
+
+Anonymous fixtures are useful for:
+- Test-specific data that won't be reused
+- Quick prototyping
+- Fixtures that need access to test helper methods
+
+## File Structure for Named Fixtures
+
+### Default Paths
+
+- **RSpec**: `spec/fixture_kit/`
+- **Minitest**: `test/fixture_kit/`
+
+These can be customized via configuration.
+
+### Organizing Fixtures
+
+Use subdirectories to organize related fixtures:
+
+```
+spec/fixture_kit/
+├── teams/
+│   ├── basic.rb
+│   ├── with_admin.rb
+│   └── large_team.rb
+├── projects/
+│   ├── active.rb
+│   └── archived.rb
+├── inheritance/
+│   ├── base.rb
+│   ├── child.rb
+│   └── grandchild.rb
+└── project_management.rb
+```
+
+Reference nested fixtures with path notation:
+
+```ruby
+fixture "teams/basic"
+fixture "projects/active"
+fixture "inheritance/grandchild"
+```
+
+### Fixture File Format
+
+Each fixture file must:
+1. Return a `FixtureKit::Definition` object
+2. Use `FixtureKit.define` with a block
+3. Expose at least one record (recommended)
+
+```ruby
+# Valid fixture file
+FixtureKit.define do
+  user = User.create!(name: "Alice", email: "alice@example.com")
+  expose(user: user)
+end
+```
+
+## Creating Records
+
+Use standard Rails/ActiveRecord methods to create records:
+
+```ruby
+FixtureKit.define do
+  # Basic creation
+  user = User.create!(name: "Alice", email: "alice@example.com")
+
+  # With associations
+  project = Project.create!(name: "Web App", owner: user)
+
+  # With nested attributes
+  task = Task.create!(
+    title: "Design homepage",
+    project: project,
+    assignee: user,
+    status: "in_progress"
+  )
+
+  # Polymorphic associations
+  comment = Comment.create!(
+    body: "Looking good!",
+    commentable: task
+  )
+
+  expose(
+    user: user,
+    project: project,
+    task: task,
+    comment: comment
+  )
+end
+```
+
+## Multi-Database Support
+
+FixtureKit automatically captures records across multiple databases:
+
+```ruby
+FixtureKit.define do
+  # Primary database
+  alice = User.create!(name: "Alice Chen", email: "alice@example.com")
+  task = Task.create!(title: "Design homepage", assignee: alice)
+
+  # Analytics database (different connection)
+  activity = ActivityLog.create!(
+    action: "task_created",
+    external_user_id: alice.id,
+    subject_type: "Task",
+    subject_id: task.id
+  )
+
+  time_entry = TimeEntry.create!(
+    external_user_id: alice.id,
+    external_task_id: task.id,
+    hours: 4.5,
+    logged_at: 2.days.ago
+  )
+
+  expose(
+    alice: alice,
+    task: task,
+    activity: activity,
+    time_entry: time_entry
+  )
+end
+```
+
+No special configuration needed - FixtureKit detects which database each model uses.
+
+## Complex Scenarios
+
+### Loops and Iteration
+
+```ruby
+FixtureKit.define do
+  owner = User.create!(name: "Owner", email: "owner@example.com", role: "admin")
+
+  # Create multiple projects
+  projects = 3.times.map do |i|
+    Project.create!(name: "Project #{i + 1}", owner: owner, status: "active")
+  end
+
+  # Create tasks for each project
+  all_tasks = projects.flat_map do |project|
+    5.times.map do |i|
+      Task.create!(title: "#{project.name} - Task #{i + 1}", project: project)
+    end
+  end
+
+  expose(
+    owner: owner,
+    projects: projects,
+    all_tasks: all_tasks
+  )
+end
+```
+
+### Conditional Logic
+
+```ruby
+FixtureKit.define do
+  users = ["Alice", "Bob", "Charlie"].map.with_index do |name, i|
+    User.create!(
+      name: name,
+      email: "#{name.downcase}@example.com",
+      role: i.zero? ? "admin" : "member"
+    )
+  end
+
+  admin = users.find { |u| u.role == "admin" }
+  members = users.reject { |u| u.role == "admin" }
+
+  expose(
+    admin: admin,
+    members: members,
+    all_users: users
+  )
+end
+```
+
+### Time and Dates
+
+```ruby
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")
+
+  # Create time entries over the past week
+  time_entries = 7.times.map do |days_ago|
+    TimeEntry.create!(
+      external_user_id: alice.id,
+      hours: rand(1.0..8.0).round(1),
+      logged_at: days_ago.days.ago,
+      description: "Work on day #{7 - days_ago}"
+    )
+  end
+
+  expose(
+    alice: alice,
+    time_entries: time_entries,
+    recent_entries: time_entries.select { |e| e.logged_at > 3.days.ago }
+  )
+end
+```
+
+## Best Practices
+
+<Note>
+- Keep fixtures focused on a specific testing scenario
+- Use descriptive names for exposed records
+- Organize related fixtures into subdirectories
+- Prefer named fixtures for shared test data
+- Use anonymous fixtures for test-specific data
+- Always use `create!` (with bang) to catch validation errors early
+</Note>
+
+## FixtureDefinitionNotFound Error
+
+If FixtureKit cannot find a named fixture file, it raises `FixtureKit::FixtureDefinitionNotFound`:
+
+```ruby
+fixture "nonexistent"  # File doesn't exist at spec/fixture_kit/nonexistent.rb
+
+# Raises:
+# FixtureKit::FixtureDefinitionNotFound:
+#   cannot find fixture definition file for 'nonexistent' at
+#   '/path/to/project/spec/fixture_kit/nonexistent.rb'
+```
+
+Ensure:
+1. The file exists at the correct path
+2. The file name matches the fixture name
+3. The file uses the `.rb` extension
+4. The `fixture_path` configuration is correct

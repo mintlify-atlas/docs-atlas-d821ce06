@@ -1,0 +1,123 @@
+---
+title: Introduction
+description: Fast test fixtures with SQL caching for Rails applications
+---
+
+# Introduction to FixtureKit
+
+FixtureKit delivers **fixture-level performance without giving up FactoryBot-style test setup**. Define test data using the tools you already know, and FixtureKit caches the SQL to replay in subsequent test runs.
+
+## The Performance Problem
+
+Rails fixtures are extremely fast, but maintaining hundreds of YAML files across large teams becomes unrealistic. Developers reach for tools like FactoryBot to keep tests readable and maintainable.
+
+The tradeoff? **Performance**.
+
+FactoryBot recreates database records on every test run. In large test suites, this overhead adds up to minutes or even hours of wasted time.
+
+## How FixtureKit Solves This
+
+FixtureKit gives you the best of both worlds:
+
+<CardGroup cols={2}>
+  <Card title="Write Like FactoryBot" icon="code">
+    Define fixtures using ActiveRecord, FactoryBot, or any Ruby code. Keep your test setup readable and maintainable.
+  </Card>
+  <Card title="Run Like Fixtures" icon="bolt">
+    FixtureKit captures SQL from your first run and replays it on subsequent runs. Get fixture-speed performance automatically.
+  </Card>
+  <Card title="Cache Automatically" icon="database">
+    Generated records are cached as SQL. No manual YAML maintenance. Cache invalidates when definitions change.
+  </Card>
+  <Card title="Framework Agnostic" icon="gears">
+    Works seamlessly with RSpec or Minitest. Integrates with Rails transactional fixtures.
+  </Card>
+</CardGroup>
+
+## Quick Example
+
+Define a fixture using familiar Ruby code:
+
+```ruby spec/fixture_kit/project_management.rb
+FixtureKit.define do
+  owner = User.create!(name: "Alice", email: "alice@example.com")
+  project = Project.create!(name: "Roadmap", owner: owner)
+
+  expose(owner: owner, project: project)
+end
+```
+
+Use it in your tests:
+
+```ruby spec/models/project_spec.rb
+RSpec.describe Project do
+  fixture "project_management"
+
+  it "loads exposed records" do
+    expect(fixture.project.owner).to eq(fixture.owner)
+  end
+end
+```
+
+**First run**: FixtureKit executes your definition and captures the SQL.
+
+**Subsequent runs**: FixtureKit replays the cached SQL. Blazing fast.
+
+## Key Concepts
+
+### Fixtures
+
+Fixtures are reusable test data definitions. You write them once using Ruby code, and FixtureKit caches the database state they create.
+
+### SQL Caching
+
+When a fixture runs for the first time, FixtureKit records every SQL INSERT statement. These statements are saved to `tmp/cache/fixture_kit/` and replayed on subsequent runs.
+
+The cache automatically invalidates when:
+- You modify the fixture definition
+- Database schema changes
+- Dependencies change
+
+### Repository & Exposure
+
+The `expose()` method makes records available in your tests. Exposed records become methods on the `fixture` object:
+
+```ruby
+expose(alice: user, posts: post_array)
+
+# In tests:
+fixture.alice  # => User instance
+fixture.posts  # => Array of Post instances
+```
+
+### Transactional Fixtures
+
+FixtureKit works with Rails transactional fixtures. Each test runs in a transaction that rolls back after the test completes, keeping your database clean.
+
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Add FixtureKit to your Rails test suite
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create your first fixture in 5 minutes
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/define">
+    Complete API documentation
+  </Card>
+  <Card title="GitHub" icon="github" href="https://github.com/Gusto/fixture_kit">
+    View source code and contribute
+  </Card>
+</CardGroup>
+
+## Requirements
+
+- **Ruby** >= 3.3.0
+- **ActiveRecord** >= 8.0
+- **ActiveSupport** >= 8.0
+- **Rails** (recommended)
+
+## What's Next?
+
+Ready to speed up your test suite? Start with [Installation](/installation) to add FixtureKit to your project.

@@ -1,0 +1,643 @@
+---
+title: "Troubleshooting"
+description: "Solutions for common FixtureKit issues"
+---
+
+## Common Issues
+
+This guide covers common errors and issues you might encounter when using FixtureKit.
+
+## Cache-Related Issues
+
+<AccordionGroup>
+  <Accordion title="CacheMissingError: Cache does not exist for fixture">
+    **Error message:**
+    ```
+    FixtureKit::CacheMissingError: Cache does not exist for fixture 'users/basic'
+    ```
+    
+    **Causes:**
+    - Cache file was deleted or never generated
+    - Cache path configuration changed between runs
+    - Using `FIXTURE_KIT_PRESERVE_CACHE=1` but cache was manually cleared
+    - File permissions prevent reading cache file
+    
+    **Solutions:**
+    
+    1. Clear cache and let it regenerate:
+       ```bash
+       rm -rf tmp/cache/fixture_kit
+       rspec
+       ```
+    
+    2. Check cache path configuration:
+       ```ruby
+       # In your test helper
+       puts FixtureKit.configuration.cache_path
+       # Should match where you expect cache files
+       ```
+    
+    3. Verify cache file exists:
+       ```bash
+       ls -la tmp/cache/fixture_kit/users/basic.json
+       ```
+    
+    4. Check file permissions:
+       ```bash
+       chmod -R 755 tmp/cache/fixture_kit
+       ```
+  </Accordion>
+  
+  <Accordion title="Stale or incorrect data in tests">
+    **Symptoms:**
+    - Tests pass locally but fail in CI
+    - Fixture data doesn't match fixture definition
+    - Schema changes not reflected in fixtures
+    
+    **Causes:**
+    - Using `FIXTURE_KIT_PRESERVE_CACHE=1` with modified fixtures
+    - Cache generated with old schema/migrations
+    - Cached data from different git branch
+    
+    **Solutions:**
+    
+    1. Clear cache and regenerate:
+       ```bash
+       rm -rf tmp/cache/fixture_kit
+       bundle exec rake db:test:prepare
+       rspec
+       ```
+    
+    2. Don't preserve cache in CI:
+       ```yaml
+       # .github/workflows/test.yml
+       - name: Run tests
+         run: rspec
+         # No FIXTURE_KIT_PRESERVE_CACHE here
+       ```
+    
+    3. Add cache directory to .gitignore:
+       ```bash
+       echo "tmp/cache/fixture_kit" >> .gitignore
+       ```
+  </Accordion>
+  
+  <Accordion title="Cache files are very large">
+    **Symptoms:**
+    - Cache files are megabytes in size
+    - Slow cache load times
+    - Excessive disk space usage
+    
+    **Causes:**
+    - Fixture creates many records
+    - Fixture includes large text/blob columns
+    - Fixture pulls in unintended associations
+    
+    **Solutions:**
+    
+    1. Check cache file size:
+       ```bash
+       ls -lh tmp/cache/fixture_kit/**/*.json | sort -k5 -hr | head -10
+       ```
+    
+    2. Review fixture definition for unnecessary data:
+       ```ruby
+       # Bad: Creates 1000 records
+       FixtureKit.define do
+         1000.times { |i| User.create!(name: "User #{i}") }
+       end
+       
+       # Better: Create only what you need
+       FixtureKit.define do
+         user1 = User.create!(name: "Alice")
+         user2 = User.create!(name: "Bob")
+         expose(user1: user1, user2: user2)
+       end
+       ```
+    
+    3. Split large fixtures into smaller ones:
+       ```ruby
+       # Instead of one huge fixture
+       fixture "everything"
+       
+       # Use smaller focused fixtures
+       fixture "users/basic"
+       fixture "projects/basic"
+       ```
+  </Accordion>
+  
+  <Accordion title="JSON parsing errors when loading cache">
+    **Error message:**
+    ```
+    JSON::ParserError: unexpected token at '...'
+    ```
+    
+    **Causes:**
+    - Cache file corrupted (test suite interrupted mid-write)
+    - Disk space exhausted during cache write
+    - Race condition with parallel test execution
+    
+    **Solutions:**
+    
+    1. Clear and regenerate cache:
+       ```bash
+       rm -rf tmp/cache/fixture_kit
+       rspec
+       ```
+    
+    2. Check disk space:
+       ```bash
+       df -h
+       ```
+    
+    3. Ensure cache directory isn't shared across parallel test processes:
+       ```ruby
+       # For parallel_tests gem
+       FixtureKit.configure do |config|
+         config.cache_path = "tmp/cache/fixture_kit.#{ENV['TEST_ENV_NUMBER']}"
+       end
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Transaction and Rollback Issues
+
+<AccordionGroup>
+  <Accordion title="Fixture data persists across tests">
+    **Symptoms:**
+    - Modifications in one test affect subsequent tests
+    - Tests pass when run individually but fail when run together
+    - Unexpected database state between tests
+    
+    **Causes:**
+    - Transactional fixtures/tests not enabled
+    - Using database_cleaner with wrong strategy
+    - Nested transactions not supported by database adapter
+    
+    **Solutions:**
+    
+    1. Enable transactional tests in RSpec:
+       ```ruby
+       # spec/rails_helper.rb
+       RSpec.configure do |config|
+         config.use_transactional_fixtures = true
+       end
+       ```
+    
+    2. Enable transactional tests in Minitest:
+       ```ruby
+       # test/test_helper.rb
+       class ActiveSupport::TestCase
+         self.use_transactional_tests = true
+       end
+       ```
+    
+    3. Check database_cleaner configuration:
+       ```ruby
+       # Should use transaction strategy
+       DatabaseCleaner.strategy = :transaction
+       # NOT :truncation or :deletion
+       ```
+  </Accordion>
+  
+  <Accordion title="Foreign key constraint errors">
+    **Error message:**
+    ```
+    PG::ForeignKeyViolation: ERROR: insert or update on table "orders" 
+    violates foreign key constraint "fk_rails_..."
+    ```
+    
+    **Causes:**
+    - Fixture tries to reference records from another fixture that isn't loaded
+    - Cache loading order issues with foreign keys
+    - Referential integrity not properly disabled during load
+    
+    **Solutions:**
+    
+    1. Use fixture composition for dependencies:
+       ```ruby
+       # orders/with_user.rb
+       FixtureKit.define do
+         extends "users/basic"  # Ensures user exists first
+         
+         order = Order.create!(user: user)
+         expose(order: order)
+       end
+       ```
+    
+    2. Include all dependencies in one fixture:
+       ```ruby
+       FixtureKit.define do
+         user = User.create!(name: "Alice")
+         order = Order.create!(user: user)
+         
+         expose(user: user, order: order)
+       end
+       ```
+    
+    3. Check that referential integrity is disabled (FixtureKit does this automatically, but verify database permissions):
+       ```ruby
+       # Should work in fixture generation
+       ActiveRecord::Base.connection.disable_referential_integrity do
+         # ...
+       end
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Fixture Definition Issues
+
+<AccordionGroup>
+  <Accordion title="FixtureDefinitionNotFound error">
+    **Error message:**
+    ```
+    FixtureKit::FixtureDefinitionNotFound: Could not find fixture 'users/basic'
+    ```
+    
+    **Causes:**
+    - Fixture file doesn't exist at expected path
+    - File exists but doesn't return a `FixtureKit::Definition`
+    - Incorrect fixture_path configuration
+    
+    **Solutions:**
+    
+    1. Check fixture path configuration:
+       ```ruby
+       # RSpec default: spec/fixture_kit
+       # Minitest default: test/fixture_kit
+       puts FixtureKit.configuration.fixture_path
+       ```
+    
+    2. Verify file exists:
+       ```bash
+       # For RSpec
+       ls spec/fixture_kit/users/basic.rb
+       
+       # For Minitest
+       ls test/fixture_kit/users/basic.rb
+       ```
+    
+    3. Ensure file uses `FixtureKit.define`:
+       ```ruby
+       # Correct
+       FixtureKit.define do
+         user = User.create!(name: "Alice")
+         expose(user: user)
+       end
+       
+       # Wrong - missing FixtureKit.define
+       user = User.create!(name: "Alice")
+       ```
+  </Accordion>
+  
+  <Accordion title="DuplicateNameError when exposing records">
+    **Error message:**
+    ```
+    FixtureKit::DuplicateNameError: Duplicate exposed name: user
+    ```
+    
+    **Causes:**
+    - Calling `expose(user: user)` multiple times
+    - Extending a fixture that exposes the same name
+    
+    **Solutions:**
+    
+    1. Expose all records in one call:
+       ```ruby
+       # Wrong
+       expose(user: user)
+       expose(project: project)
+       expose(user: updated_user)  # Error!
+       
+       # Correct
+       expose(user: user, project: project)
+       ```
+    
+    2. Use different names when extending:
+       ```ruby
+       # base.rb
+       FixtureKit.define do
+         user = User.create!(name: "Alice")
+         expose(user: user)
+       end
+       
+       # extended.rb
+       FixtureKit.define do
+         extends "base"
+         
+         admin = User.create!(name: "Admin", role: "admin")
+         expose(admin: admin)  # Different name
+       end
+       ```
+  </Accordion>
+  
+  <Accordion title="InvalidFixtureDeclaration error">
+    **Error message:**
+    ```
+    FixtureKit::InvalidFixtureDeclaration: Provide exactly one of name or block
+    ```
+    
+    **Causes:**
+    - Calling `fixture` with both name and block
+    - Calling `fixture` with neither name nor block
+    
+    **Solutions:**
+    
+    ```ruby
+    # Wrong - both name and block
+    fixture "users/basic" do
+      User.create!(name: "Alice")
+    end
+    
+    # Correct - name only
+    fixture "users/basic"
+    
+    # Correct - block only (anonymous fixture)
+    fixture do
+      user = User.create!(name: "Alice")
+      expose(user: user)
+    end
+    ```
+  </Accordion>
+  
+  <Accordion title="MultipleFixtures error">
+    **Error message:**
+    ```
+    FixtureKit::MultipleFixtures: Only one fixture declaration allowed per context
+    ```
+    
+    **Causes:**
+    - Declaring `fixture` multiple times in the same test class/context
+    
+    **Solutions:**
+    
+    1. Use one comprehensive fixture:
+       ```ruby
+       # Wrong
+       RSpec.describe Order do
+         fixture "users/basic"
+         fixture "projects/basic"  # Error!
+       end
+       
+       # Correct - one fixture with both
+       RSpec.describe Order do
+         fixture "orders/context"  # Contains both users and projects
+       end
+       ```
+    
+    2. Use nested contexts:
+       ```ruby
+       RSpec.describe Order do
+         context "with basic user" do
+           fixture "users/basic"
+           # tests
+         end
+         
+         context "with admin user" do
+           fixture "users/admin"
+           # tests
+         end
+       end
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Database State Issues
+
+<AccordionGroup>
+  <Accordion title="Records not found when accessing fixture.record">
+    **Symptoms:**
+    - `fixture.user` returns `nil`
+    - `fixture.project.name` raises `NoMethodError: undefined method 'name' for nil`
+    
+    **Causes:**
+    - Record was deleted or modified in a previous test
+    - Record ID in cache doesn't match database
+    - Not using transactional tests
+    
+    **Solutions:**
+    
+    1. Verify transactional tests are enabled (see "Fixture data persists" above)
+    
+    2. Check if record exists in database:
+       ```ruby
+       it "debugs missing record" do
+         puts "User ID from fixture: #{fixture.instance_variable_get(:@data)[:user]}"
+         puts "User in DB: #{User.find_by(id: 1).inspect}"
+       end
+       ```
+    
+    3. Clear cache and regenerate:
+       ```bash
+       rm -rf tmp/cache/fixture_kit
+       rspec
+       ```
+  </Accordion>
+  
+  <Accordion title="Sequence/ID conflicts">
+    **Symptoms:**
+    - UniqueConstraintViolation errors
+    - Primary key conflicts when creating new records
+    
+    **Causes:**
+    - Fixtures create records with specific IDs
+    - Database sequence out of sync with fixture IDs
+    - Creating new records after fixture load
+    
+    **Solutions:**
+    
+    1. Let database assign IDs automatically:
+       ```ruby
+       # Fixtures should not specify IDs
+       FixtureKit.define do
+         user = User.create!(name: "Alice")  # ID assigned automatically
+         expose(user: user)
+       end
+       ```
+    
+    2. Reset sequences after fixture load (PostgreSQL):
+       ```ruby
+       # In test helper or after_suite hook
+       ActiveRecord::Base.connection.tables.each do |table|
+         ActiveRecord::Base.connection.reset_pk_sequence!(table)
+       end
+       ```
+  </Accordion>
+</AccordionGroup>
+
+## Performance Issues
+
+<AccordionGroup>
+  <Accordion title="Fixtures take a long time to generate">
+    **Symptoms:**
+    - First test run is very slow
+    - `on_cache_saved` callbacks show high duration values
+    
+    **Causes:**
+    - Fixture creates too many records
+    - Deep association chains
+    - Complex validations or callbacks on models
+    
+    **Solutions:**
+    
+    1. Profile fixture generation:
+       ```ruby
+       FixtureKit.configure do |config|
+         config.on_cache_saved do |identifier, duration|
+           if duration > 1.0
+             puts "SLOW: #{identifier} took #{duration.round(2)}s"
+           end
+         end
+       end
+       ```
+    
+    2. Simplify fixture:
+       ```ruby
+       # Bad - creates 100 users
+       100.times { User.create!(...) }
+       
+       # Better - create only what's needed
+       user1 = User.create!(...)
+       user2 = User.create!(...)
+       ```
+    
+    3. Use fixture composition to avoid duplication:
+       ```ruby
+       # Reuse expensive setup
+       extends "users/basic"
+       ```
+  </Accordion>
+  
+  <Accordion title="Tests are slow even with FixtureKit">
+    **Symptoms:**
+    - No significant speedup after adding FixtureKit
+    - Cache callbacks show fast load times but tests are still slow
+    
+    **Causes:**
+    - Fixtures used for data that should be factories
+    - Test bottleneck is elsewhere (API calls, sleep, etc.)
+    - Not enough fixture reuse
+    
+    **Solutions:**
+    
+    1. Use the analyzer to verify fixture reuse:
+       ```bash
+       rspec --dry-run --require fixture_kit/analyzer spec/
+       ```
+    
+    2. Profile test suite:
+       ```bash
+       rspec --profile 10
+       ```
+    
+    3. See [Performance Guide](/advanced/performance) for optimization strategies
+  </Accordion>
+</AccordionGroup>
+
+## Debugging Techniques
+
+### Use Callbacks for Debugging
+
+Add temporary logging to understand fixture behavior:
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_save do |identifier|
+    puts "[DEBUG] Generating #{identifier}..."
+  end
+  
+  config.on_cache_saved do |identifier, duration|
+    puts "[DEBUG] Saved #{identifier} in #{duration.round(4)}s"
+  end
+  
+  config.on_cache_mount do |identifier|
+    puts "[DEBUG] Loading #{identifier}..."
+  end
+  
+  config.on_cache_mounted do |identifier, duration|
+    puts "[DEBUG] Loaded #{identifier} in #{duration.round(4)}s"
+  end
+end
+```
+
+### Inspect Cache Files
+
+Cache files are JSON and human-readable:
+
+```bash
+cat tmp/cache/fixture_kit/users/basic.json | jq .
+```
+
+Check:
+- What records are cached
+- What IDs are stored
+- SQL statements being replayed
+
+### Verify Fixture Loading
+
+Add a debug test:
+
+```ruby
+RSpec.describe "Debug fixture" do
+  fixture "users/basic"
+  
+  it "shows fixture data" do
+    puts "Fixture exposed names: #{fixture.instance_variable_get(:@exposed).keys}"
+    puts "User from fixture: #{fixture.user.inspect}"
+    puts "User from DB: #{User.find_by(id: fixture.user.id).inspect}"
+  end
+end
+```
+
+### Enable SQL Logging
+
+See what SQL FixtureKit executes:
+
+```ruby
+ActiveRecord::Base.logger = Logger.new(STDOUT)
+```
+
+This will show cache DELETE and INSERT statements.
+
+### Check Configuration
+
+Print current configuration:
+
+```ruby
+config = FixtureKit.configuration
+puts "Fixture path: #{config.fixture_path}"
+puts "Cache path: #{config.cache_path}"
+puts "Adapter: #{config.adapter}"
+```
+
+## Getting Help
+
+If you're still stuck:
+
+1. **Check the reference**: See [API Reference](/api/define) for complete documentation
+2. **Review examples**: Look at fixture definitions in the [source code](https://github.com/Gusto/fixture_kit/tree/main/spec/fixture_kit)
+3. **Open an issue**: Report bugs at [GitHub Issues](https://github.com/Gusto/fixture_kit/issues)
+
+<Note>
+  When reporting issues, include:
+  - Ruby and Rails versions
+  - FixtureKit version
+  - Minimal reproduction case
+  - Relevant error messages and stack traces
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Performance Guide" icon="gauge-high" href="/advanced/performance">
+    Optimize your fixtures for maximum speed
+  </Card>
+  
+  <Card title="Caching System" icon="database" href="/advanced/caching">
+    Understand how caching works to debug cache issues
+  </Card>
+  
+  <Card title="Analyzer Tool" icon="chart-line" href="/advanced/analyzer">
+    Find optimization opportunities in your test suite
+  </Card>
+</CardGroup>

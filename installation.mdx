@@ -1,0 +1,197 @@
+---
+title: Installation
+description: Add FixtureKit to your Rails test suite
+---
+
+# Installation
+
+Get FixtureKit running in your Rails application in minutes.
+
+## Requirements
+
+Before installing, ensure your project meets these requirements:
+
+- **Ruby** >= 3.3.0
+- **ActiveRecord** >= 8.0
+- **ActiveSupport** >= 8.0
+
+FixtureKit works with both RSpec and Minitest.
+
+## Add the Gem
+
+Add `fixture_kit` to your `Gemfile` in the `:test` group:
+
+```ruby Gemfile
+group :test do
+  gem "fixture_kit"
+end
+```
+
+Then install:
+
+```bash
+bundle install
+```
+
+## Framework Setup
+
+Choose your testing framework and follow the setup instructions:
+
+<Tabs>
+  <Tab title="RSpec">
+    Add FixtureKit to your `spec/rails_helper.rb`:
+
+    ```ruby spec/rails_helper.rb
+    require "fixture_kit/rspec"
+
+    RSpec.configure do |config|
+      # Enable transactional fixtures
+      config.use_transactional_fixtures = true
+    end
+    ```
+
+    <Note>
+      The `require "fixture_kit/rspec"` statement automatically configures FixtureKit for RSpec. It:
+      - Sets the default fixture path to `spec/fixture_kit/`
+      - Adds the `fixture` DSL method to example groups
+      - Configures the `fixture` helper for accessing exposed records
+      - Integrates with RSpec's transactional fixtures
+    </Note>
+
+    ### Optional Configuration
+
+    Customize FixtureKit's behavior in `spec/rails_helper.rb`:
+
+    ```ruby spec/rails_helper.rb
+    FixtureKit.configure do |config|
+      # Change fixture definition directory (default: spec/fixture_kit)
+      config.fixture_path = Rails.root.join("spec/fixtures/definitions").to_s
+
+      # Change cache directory (default: tmp/cache/fixture_kit)
+      config.cache_path = Rails.root.join("tmp/fixture_cache").to_s
+    end
+    ```
+  </Tab>
+  
+  <Tab title="Minitest">
+    Add FixtureKit to your `test/test_helper.rb`:
+
+    ```ruby test/test_helper.rb
+    require "fixture_kit/minitest"
+
+    class ActiveSupport::TestCase
+      # Enable transactional tests
+      self.use_transactional_tests = true
+    end
+    ```
+
+    <Note>
+      The `require "fixture_kit/minitest"` statement automatically configures FixtureKit for Minitest. It:
+      - Sets the default fixture path to `test/fixture_kit/`
+      - Adds the `fixture` class method for declaring fixtures
+      - Configures the `fixture` instance method for accessing exposed records
+      - Integrates with Rails transactional tests
+    </Note>
+
+    ### Optional Configuration
+
+    Customize FixtureKit's behavior in `test/test_helper.rb`:
+
+    ```ruby test/test_helper.rb
+    FixtureKit.configure do |config|
+      # Change fixture definition directory (default: test/fixture_kit)
+      config.fixture_path = Rails.root.join("test/fixtures/definitions").to_s
+
+      # Change cache directory (default: tmp/cache/fixture_kit)
+      config.cache_path = Rails.root.join("tmp/fixture_cache").to_s
+    end
+    ```
+  </Tab>
+</Tabs>
+
+## Verify Installation
+
+Create a simple fixture to verify everything works:
+
+<Tabs>
+  <Tab title="RSpec">
+    Create `spec/fixture_kit/test.rb`:
+
+    ```ruby spec/fixture_kit/test.rb
+    FixtureKit.define do
+      user = User.create!(name: "Test User", email: "test@example.com")
+      expose(user: user)
+    end
+    ```
+
+    Create a test:
+
+    ```ruby spec/models/user_spec.rb
+    RSpec.describe User do
+      fixture "test"
+
+      it "loads the fixture" do
+        expect(fixture.user.name).to eq("Test User")
+      end
+    end
+    ```
+
+    Run it:
+
+    ```bash
+    bundle exec rspec spec/models/user_spec.rb
+    ```
+  </Tab>
+  
+  <Tab title="Minitest">
+    Create `test/fixture_kit/test.rb`:
+
+    ```ruby test/fixture_kit/test.rb
+    FixtureKit.define do
+      user = User.create!(name: "Test User", email: "test@example.com")
+      expose(user: user)
+    end
+    ```
+
+    Create a test:
+
+    ```ruby test/models/user_test.rb
+    class UserTest < ActiveSupport::TestCase
+      fixture "test"
+
+      test "loads the fixture" do
+        assert_equal "Test User", fixture.user.name
+      end
+    end
+    ```
+
+    Run it:
+
+    ```bash
+    bundle exec rails test test/models/user_test.rb
+    ```
+  </Tab>
+</Tabs>
+
+If the test passes, FixtureKit is installed correctly!
+
+## Cache Directory
+
+FixtureKit stores cached SQL in `tmp/cache/fixture_kit/`. You should add this to your `.gitignore`:
+
+```gitignore .gitignore
+# FixtureKit cache
+/tmp/cache/fixture_kit/
+```
+
+<Warning>
+  Never commit fixture cache files to version control. The cache is environment-specific and will be regenerated automatically.
+</Warning>
+
+## Next Steps
+
+Now that FixtureKit is installed, learn how to create and use fixtures:
+
+<Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+  Create your first fixture and start speeding up your tests
+</Card>

@@ -1,0 +1,357 @@
+---
+title: Configuration
+description: Configure FixtureKit's behavior, paths, and adapters
+---
+
+FixtureKit provides several configuration options to customize its behavior for your project.
+
+## Configuration Block
+
+Configure FixtureKit using the `configure` method:
+
+```ruby
+# spec/rails_helper.rb (RSpec)
+# test/test_helper.rb (Minitest)
+FixtureKit.configure do |config|
+  config.fixture_path = "spec/fixtures"
+  config.cache_path = "tmp/fixture_cache"
+end
+```
+
+For RSpec, you can also configure via RSpec's configuration:
+
+```ruby
+RSpec.configure do |config|
+  config.fixture_kit.configuration.fixture_path = "spec/fixtures"
+  config.fixture_kit.configuration.cache_path = "tmp/fixture_cache"
+end
+```
+
+## Configuration Options
+
+### fixture_path
+
+Specifies where FixtureKit looks for fixture definition files.
+
+**Type:** `String`
+
+**Default:**
+- RSpec: `"spec/fixture_kit"`
+- Minitest: `"test/fixture_kit"`
+
+**Example:**
+```ruby
+FixtureKit.configure do |config|
+  config.fixture_path = "spec/fixtures/custom"
+end
+```
+
+With this configuration:
+```ruby
+fixture "users/basic"
+# Looks for: spec/fixtures/custom/users/basic.rb
+```
+
+### cache_path
+
+Specifies where FixtureKit stores cached fixture data.
+
+**Type:** `String`
+
+**Default:** `"tmp/cache/fixture_kit"`
+
+**Example:**
+```ruby
+FixtureKit.configure do |config|
+  config.cache_path = "tmp/test_fixtures"
+end
+```
+
+The cache directory structure:
+```
+tmp/cache/fixture_kit/
+├── teams/
+│   └── basic.json
+├── project_management.json
+├── _anonymous/
+│   └── rspec_example_groups_user_analytics.json
+└── inheritance/
+    ├── base.json
+    └── child.json
+```
+
+### adapter
+
+Configures the test framework adapter and its options.
+
+**Type:** `Class`, with optional keyword arguments
+
+**Default:**
+- RSpec: `FixtureKit::RSpecAdapter`
+- Minitest: `FixtureKit::MinitestAdapter`
+
+**Example:**
+```ruby
+FixtureKit.configure do |config|
+  config.adapter(FixtureKit::RSpecAdapter, custom_option: true)
+end
+```
+
+The adapter is automatically set by the RSpec or Minitest integration. You typically don't need to configure this manually unless building a custom adapter.
+
+## Environment Variables
+
+### FIXTURE_KIT_PRESERVE_CACHE
+
+Prevents FixtureKit from clearing the cache directory on startup.
+
+**Type:** Boolean environment variable
+
+**Accepted values:** `1`, `true`, `yes` (case-insensitive)
+
+**Default:** Not set (cache is cleared)
+
+**Example:**
+```bash
+# Preserve cache between test runs
+FIXTURE_KIT_PRESERVE_CACHE=1 bundle exec rspec
+
+# Or in .env file
+FIXTURE_KIT_PRESERVE_CACHE=true
+```
+
+**Use cases:**
+- Speed up development by reusing cached fixtures
+- Debug fixture generation issues
+- Inspect cache files after test runs
+
+<Warning>
+Be careful when preserving the cache. If you modify fixture definitions, you must manually clear the cache or fixtures won't regenerate:
+```bash
+rm -rf tmp/cache/fixture_kit
+```
+</Warning>
+
+## Complete Configuration Example
+
+### RSpec
+
+```ruby
+# spec/rails_helper.rb
+require "fixture_kit/rspec"
+
+RSpec.configure do |config|
+  config.use_transactional_fixtures = true
+
+  # FixtureKit configuration
+  config.fixture_kit.configuration.fixture_path = "spec/fixtures"
+  config.fixture_kit.configuration.cache_path = "tmp/test_cache"
+
+  # Optional: Add callbacks
+  config.fixture_kit.configuration.on_cache_save do |identifier|
+    Rails.logger.debug "Generating fixture: #{identifier}"
+  end
+
+  config.fixture_kit.configuration.on_cache_saved do |identifier, elapsed|
+    Rails.logger.info "Generated #{identifier} in #{elapsed.round(2)}s"
+  end
+end
+```
+
+### Minitest
+
+```ruby
+# test/test_helper.rb
+require "fixture_kit/minitest"
+
+FixtureKit.configure do |config|
+  config.fixture_path = "test/fixtures"
+  config.cache_path = "tmp/test_cache"
+
+  # Optional: Add callbacks
+  config.on_cache_save do |identifier|
+    puts "Generating fixture: #{identifier}"
+  end
+
+  config.on_cache_saved do |identifier, elapsed|
+    puts "Generated #{identifier} in #{elapsed.round(2)}s"
+  end
+end
+
+class ActiveSupport::TestCase
+  self.use_transactional_tests = true
+end
+```
+
+## Accessing Configuration
+
+Access the configuration at runtime:
+
+```ruby
+# Get current fixture path
+FixtureKit.runner.configuration.fixture_path
+# => "spec/fixture_kit"
+
+# Get current cache path
+FixtureKit.runner.configuration.cache_path
+# => "tmp/cache/fixture_kit"
+
+# Get current adapter class
+FixtureKit.runner.configuration.adapter
+# => FixtureKit::RSpecAdapter
+
+# Get adapter options
+FixtureKit.runner.configuration.adapter_options
+# => {}
+```
+
+## Per-Environment Configuration
+
+Configure different paths for different environments:
+
+```ruby
+RSpec.configure do |config|
+  config.fixture_kit.configuration.cache_path = 
+    if ENV['CI']
+      "tmp/ci_cache/fixture_kit"
+    else
+      "tmp/cache/fixture_kit"
+    end
+end
+```
+
+## Callbacks Configuration
+
+Configure callbacks to hook into fixture lifecycle events:
+
+```ruby
+FixtureKit.configure do |config|
+  # Called before fixture generation starts
+  config.on_cache_save do |identifier|
+    puts "[FixtureKit] Generating: #{identifier}"
+  end
+
+  # Called after fixture generation completes
+  config.on_cache_saved do |identifier, elapsed|
+    puts "[FixtureKit] Generated #{identifier} in #{elapsed.round(3)}s"
+  end
+
+  # Called before fixture data is loaded
+  config.on_cache_mount do |identifier|
+    puts "[FixtureKit] Loading: #{identifier}"
+  end
+
+  # Called after fixture data is loaded
+  config.on_cache_mounted do |identifier, elapsed|
+    puts "[FixtureKit] Loaded #{identifier} in #{elapsed.round(3)}s"
+  end
+end
+```
+
+See the [Callbacks](/guides/callbacks) guide for detailed information.
+
+## Default Values Summary
+
+<CodeGroup>
+
+```ruby RSpec Defaults
+fixture_path: "spec/fixture_kit"
+cache_path: "tmp/cache/fixture_kit"
+adapter: FixtureKit::RSpecAdapter
+adapter_options: {}
+```
+
+```ruby Minitest Defaults
+fixture_path: "test/fixture_kit"
+cache_path: "tmp/cache/fixture_kit"
+adapter: FixtureKit::MinitestAdapter
+adapter_options: {}
+```
+
+</CodeGroup>
+
+## Configuration in Tests
+
+You can check configuration values in your tests:
+
+```ruby
+RSpec.describe "Configuration" do
+  it "uses correct paths" do
+    config = FixtureKit.runner.configuration
+
+    expect(config.fixture_path).to eq("spec/fixture_kit")
+    expect(config.cache_path).to eq("tmp/cache/fixture_kit")
+  end
+end
+```
+
+## Cache Directory Structure
+
+The cache directory mirrors your fixture file structure:
+
+```ruby
+# Fixture: spec/fixture_kit/teams/basic.rb
+# Cache:    tmp/cache/fixture_kit/teams/basic.json
+
+# Fixture: spec/fixture_kit/project_management.rb
+# Cache:    tmp/cache/fixture_kit/project_management.json
+
+# Anonymous fixture in RSpec::ExampleGroups::UserAnalytics
+# Cache: tmp/cache/fixture_kit/_anonymous/rspec_example_groups_user_analytics.json
+```
+
+Each cache file contains:
+- SQL INSERT statements for all captured records
+- Serialized exposed record references
+- Metadata about which models and databases are involved
+
+## Best Practices
+
+<Note>
+- Use the default paths unless you have a specific reason to change them
+- Keep cache_path in `tmp/` so it's ignored by version control
+- Add `tmp/cache/fixture_kit/` to `.gitignore`
+- Use `FIXTURE_KIT_PRESERVE_CACHE` only for development/debugging
+- Configure callbacks for logging in CI environments
+- Keep configuration in your test helper files for consistency
+</Note>
+
+## Troubleshooting
+
+### Fixtures Not Found
+
+If you get `FixtureDefinitionNotFound` errors:
+
+1. Check your `fixture_path` configuration
+2. Verify the fixture file exists at the expected location
+3. Ensure the file name matches the fixture name
+
+```ruby
+# If configured:
+config.fixture_path = "spec/custom_fixtures"
+
+# Then this fixture:
+fixture "users/basic"
+
+# Must exist at:
+# spec/custom_fixtures/users/basic.rb
+```
+
+### Cache Not Regenerating
+
+If fixture changes aren't reflected:
+
+1. Check if `FIXTURE_KIT_PRESERVE_CACHE` is set
+2. Manually clear the cache directory:
+   ```bash
+   rm -rf tmp/cache/fixture_kit
+   ```
+3. Ensure you're using `create!` (with bang) in fixtures to catch errors
+
+### Permission Issues
+
+If you get permission errors:
+
+1. Ensure the cache directory is writable
+2. Check that the directory isn't owned by a different user (common in Docker)
+3. Verify `.gitignore` isn't preventing directory creation

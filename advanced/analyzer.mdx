@@ -1,0 +1,233 @@
+---
+title: "Analyzer Tool"
+description: "Find high-ROI FixtureKit optimization targets in your test suite"
+---
+
+## Overview
+
+The FixtureKit Analyzer helps you identify which factory_bot `let` blocks in your RSpec test suite would benefit most from conversion to FixtureKit fixtures. It analyzes your specs via `--dry-run` and ranks factory lets by how many examples share each one—the more examples that share a let, the bigger the speedup you'll get from caching it with FixtureKit.
+
+## Usage
+
+Run the analyzer using RSpec's `--dry-run` flag with the analyzer loaded:
+
+```bash
+rspec --dry-run --require fixture_kit/analyzer [spec files or dirs...]
+```
+
+### Examples
+
+Analyze all specs:
+
+```bash
+rspec --dry-run --require fixture_kit/analyzer spec/
+```
+
+Analyze specific spec files:
+
+```bash
+rspec --dry-run --require fixture_kit/analyzer spec/models/order_spec.rb
+```
+
+## Environment Variables
+
+Customize analyzer behavior with these environment variables:
+
+<ParamField path="ANALYZER_FORMAT" type="string" default="text">
+  Output format: `text` or `json`
+</ParamField>
+
+<ParamField path="ANALYZER_LIMIT" type="integer" default="50">
+  Maximum number of files to show in output
+</ParamField>
+
+<ParamField path="ANALYZER_LETS_PER_FILE" type="integer" default="8">
+  Maximum number of lets to show per file
+</ParamField>
+
+<ParamField path="ANALYZER_MIN_REUSE" type="integer" default="2">
+  Only show files where the most-reused let appears in at least this many examples
+</ParamField>
+
+<ParamField path="ANALYZER_OUTPUT" type="string">
+  Path to write JSON output file (in addition to stdout)
+</ParamField>
+
+### Example with Options
+
+```bash
+ANALYZER_FORMAT=json \
+ANALYZER_LIMIT=20 \
+ANALYZER_MIN_REUSE=5 \
+ANALYZER_OUTPUT=analysis.json \
+rspec --dry-run --require fixture_kit/analyzer spec/
+```
+
+## Understanding the Output
+
+The analyzer produces a report showing files ranked by their highest single-let reuse count.
+
+### Text Format Output
+
+```text
+==============================================================================
+FACTORY LET REUSE (ranked by highest single-let example count)
+==============================================================================
+
+142 spec files analyzed, 89 with max reuse >= 2
+
+1. spec/models/order_spec.rb
+   examples: 8  |  factory lets: 4  |  max reuse: 8
+   --------------------------------------------------------------------------------
+   let(:employee)  examples: 8  factories: employee
+      group: Orders
+   let(:company)  examples: 6  factories: company
+      group: Orders
+   let(:admin)  examples: 3  factories: admin_user
+      group: with admin
+   let(:company)  examples: 2  factories: company
+      group: with override
+```
+
+### JSON Format Output
+
+```json
+[
+  {
+    "file": "spec/models/order_spec.rb",
+    "total_examples": 8,
+    "max_reuse": 8,
+    "lets": [
+      {
+        "let_name": "employee",
+        "factories": ["employee"],
+        "example_count": 8,
+        "defined_at": "spec/models/order_spec.rb:8",
+        "group": "Orders"
+      },
+      {
+        "let_name": "company",
+        "factories": ["company"],
+        "example_count": 6,
+        "defined_at": "spec/models/order_spec.rb:7",
+        "group": "Orders"
+      }
+    ]
+  }
+]
+```
+
+## Interpreting Results
+
+The analyzer helps you prioritize which lets to convert to FixtureKit fixtures:
+
+### Key Metrics
+
+**max_reuse**: The number of examples that share the most-reused let in this file. This is your primary optimization signal.
+
+**example_count**: How many examples use this specific let. Higher numbers mean more opportunities for cache reuse.
+
+**total_examples**: Total number of examples in the file. Helps gauge the file's overall test coverage.
+
+### Prioritization Strategy
+
+<Steps>
+  <Step title="Focus on high max_reuse values">
+    Files with `max_reuse >= 10` offer the best ROI. A let used in 10+ examples means FixtureKit can replace 10+ factory calls with a single cached fixture load.
+  </Step>
+  
+  <Step title="Look for multiple high-reuse lets in the same file">
+    Files with several lets that have high `example_count` values are excellent candidates—you can convert multiple lets to a single fixture definition.
+  </Step>
+  
+  <Step title="Consider factory complexity">
+    Lets that create complex factory graphs (factories with many associations) will see bigger speedups than simple factories, even with lower reuse counts.
+  </Step>
+</Steps>
+
+<Tip>
+  Start with files ranked in the top 10. Converting just these high-impact files often yields 40-60% of the total potential speedup.
+</Tip>
+
+## Converting Lets to Fixtures
+
+Once you've identified target files, convert high-reuse lets to FixtureKit fixtures:
+
+### Before (factory_bot lets)
+
+```ruby spec/models/order_spec.rb
+RSpec.describe Order do
+  let(:company) { create(:company) }
+  let(:employee) { create(:employee, company: company) }
+  
+  it "assigns employee to order" do
+    order = create(:order, employee: employee)
+    expect(order.employee).to eq(employee)
+  end
+  
+  it "uses employee's company" do
+    order = create(:order, employee: employee)
+    expect(order.company).to eq(company)
+  end
+  
+  # ... 6 more examples using employee and company
+end
+```
+
+### After (FixtureKit)
+
+```ruby spec/fixture_kit/orders_context.rb
+FixtureKit.define do
+  company = Company.create!(name: "Acme Corp")
+  employee = Employee.create!(name: "Alice", company: company)
+  
+  expose(company: company, employee: employee)
+end
+```
+
+```ruby spec/models/order_spec.rb
+RSpec.describe Order do
+  fixture "orders_context"
+  
+  it "assigns employee to order" do
+    order = create(:order, employee: fixture.employee)
+    expect(order.employee).to eq(fixture.employee)
+  end
+  
+  it "uses employee's company" do
+    order = create(:order, employee: fixture.employee)
+    expect(order.company).to eq(fixture.company)
+  end
+  
+  # ... 6 more examples using fixture.employee and fixture.company
+end
+```
+
+<Note>
+  The first test run will generate and cache the fixture. Subsequent runs will load from cache, replacing multiple factory calls with a single SQL replay.
+</Note>
+
+## How It Works
+
+The analyzer uses RSpec's `--dry-run` mode to inspect your test suite without actually running tests:
+
+1. **AST parsing**: Scans `let` blocks and identifies factory_bot factory calls
+2. **Example counting**: Tracks which examples have access to each let (including inherited lets from parent contexts)
+3. **Ranking**: Sorts files and lets by reuse count to surface high-impact targets
+4. **Reporting**: Outputs results in text or JSON format
+
+<Warning>
+  The analyzer only detects factory calls inside `let` blocks. Factories called directly in examples or in `before` blocks won't appear in the results.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Caching System" icon="database" href="/advanced/caching">
+    Learn how FixtureKit's SQL caching works under the hood
+  </Card>
+  
+  <Card title="Performance Guide" icon="gauge-high" href="/advanced/performance">
+    Best practices for maximizing speed gains
+  </Card>
+</CardGroup>

@@ -1,0 +1,265 @@
+---
+title: 'Adapters'
+description: 'Test framework adapters and custom adapter implementation'
+---
+
+## Overview
+
+Adapters allow FixtureKit to work with different test frameworks (RSpec, Minitest, etc.). They provide the test execution context needed to create database records within transactions.
+
+## The Adapter Contract
+
+All adapters must subclass `FixtureKit::Adapter` and implement two required methods:
+
+```ruby
+class CustomAdapter < FixtureKit::Adapter
+  def execute(&block)
+    # Execute the block in a test context
+  end
+
+  def identifier_for(identifier)
+    # Convert test identifier to fixture file name
+  end
+end
+```
+
+## Required Methods
+
+### execute(&block)
+
+Executes the provided block within a test framework context, ensuring proper database transactions and test lifecycle.
+
+<ParamField path="block" type="Proc" required>
+  The block containing fixture setup code to execute in the test context.
+</ParamField>
+
+<ResponseField name="return" type="void">
+  Should raise an error if the execution fails, otherwise returns nothing.
+</ResponseField>
+
+**Responsibilities:**
+- Create a test execution context
+- Execute the block within that context
+- Handle test framework-specific setup/teardown
+- Raise exceptions from the block if execution fails
+
+### identifier_for(identifier)
+
+Converts a test class or module identifier to a fixture file name.
+
+<ParamField path="identifier" type="String | Module" required>
+  The test class name or module (e.g., `RSpec::ExampleGroups::Users` or `"UsersTest"`).
+</ParamField>
+
+<ResponseField name="return" type="String">
+  The underscored fixture file name (e.g., `"users"`).
+</ResponseField>
+
+**Purpose:**
+Determines which fixture definition file to load based on the test context.
+
+## Adapter Initialization
+
+Adapters receive an optional hash of configuration options:
+
+```ruby
+# From lib/fixture_kit/adapter.rb:7-9
+def initialize(options = {})
+  @options = options
+end
+```
+
+<ParamField path="options" type="Hash" default="{}">
+  Configuration options passed from `FixtureKit.configure`.
+</ParamField>
+
+Access options in your adapter via the `@options` instance variable:
+
+```ruby
+class CustomAdapter < FixtureKit::Adapter
+  def execute(&block)
+    verbose = @options[:verbose] || false
+    # Use verbose setting...
+  end
+end
+```
+
+## Built-in Adapters
+
+### RSpecAdapter
+
+Adapter for RSpec test framework.
+
+```ruby
+FixtureKit.configure do |config|
+  config.adapter(FixtureKit::RSpecAdapter)
+end
+```
+
+**Implementation highlights:**
+
+- Creates a temporary `RSpec::Core::ExampleGroup` subclass
+- Executes the block as an RSpec example
+- Preserves current example and scope context
+- Converts `RSpec::ExampleGroups::` namespace to underscored file names
+
+```ruby
+# From lib/fixture_kit/adapters/rspec_adapter.rb:23-26
+def identifier_for(identifier)
+  normalized_scope = identifier.to_s.sub(/\ARSpec::ExampleGroups::/, "")
+  ActiveSupport::Inflector.underscore(normalized_scope)
+end
+```
+
+**Example:** `RSpec::ExampleGroups::Users::Admin` → `"users/admin"`
+
+### MinitestAdapter
+
+Adapter for Minitest/ActiveSupport::TestCase (Rails default).
+
+```ruby
+FixtureKit.configure do |config|
+  config.adapter(FixtureKit::MinitestAdapter)
+end
+```
+
+**Implementation highlights:**
+
+- Creates a temporary `ActiveSupport::TestCase` subclass
+- Includes `ActiveRecord::TestFixtures` for database transaction support
+- Executes block as a Minitest test method
+- Removes temporary test class from Minitest's runnable list
+- Underscores test class names for fixture file names
+
+```ruby
+# From lib/fixture_kit/adapters/minitest_adapter.rb:24-26
+def identifier_for(identifier)
+  ActiveSupport::Inflector.underscore(identifier.to_s)
+end
+```
+
+**Example:** `"UsersAdminTest"` → `"users_admin_test"`
+
+## Creating a Custom Adapter
+
+### Example: Custom Framework Adapter
+
+```ruby
+class MyFrameworkAdapter < FixtureKit::Adapter
+  def execute(&block)
+    # Create test context
+    test_instance = MyFramework::TestCase.new
+    
+    # Set up transaction
+    MyFramework::Database.transaction do
+      # Execute the fixture setup
+      test_instance.instance_eval(&block)
+      
+      # Rollback to clean up
+      raise ActiveRecord::Rollback
+    end
+  rescue => e
+    # Re-raise any errors from the block
+    raise e unless e.is_a?(ActiveRecord::Rollback)
+  end
+
+  def identifier_for(identifier)
+    # Convert "MyApp::Tests::Users" to "users"
+    identifier.to_s
+              .sub(/^MyApp::Tests::/, '')
+              .underscore
+  end
+end
+```
+
+### Using the Custom Adapter
+
+```ruby
+FixtureKit.configure do |config|
+  config.adapter(MyFrameworkAdapter, verbose: true)
+end
+```
+
+## Adapter Selection
+
+FixtureKit uses `MinitestAdapter` by default. To use a different adapter:
+
+```ruby
+# For RSpec projects
+FixtureKit.configure do |config|
+  config.adapter(FixtureKit::RSpecAdapter)
+end
+
+# For custom adapters
+FixtureKit.configure do |config|
+  config.adapter(MyCustomAdapter, option1: "value")
+end
+```
+
+## Common Patterns
+
+### Transaction Management
+
+Most adapters should execute fixtures within a database transaction that rolls back:
+
+```ruby
+def execute(&block)
+  ActiveRecord::Base.transaction do
+    block.call
+    raise ActiveRecord::Rollback  # Always rollback
+  end
+end
+```
+
+### Context Preservation
+
+When working with thread-local state (like RSpec's current example), preserve it:
+
+```ruby
+def execute(&block)
+  previous_context = Framework.current_context
+  # ... execute block ...
+ensure
+  Framework.current_context = previous_context
+end
+```
+
+### Error Handling
+
+Always propagate errors from the block:
+
+```ruby
+def execute(&block)
+  result = test_instance.run
+  raise result.error unless result.passed?
+end
+```
+
+## Implementation Reference
+
+Base adapter class:
+
+```ruby
+# From lib/fixture_kit/adapter.rb:4-19
+class Adapter
+  attr_reader :options
+
+  def initialize(options = {})
+    @options = options
+  end
+
+  def execute
+    raise NotImplementedError, "#{self.class} must implement #execute"
+  end
+
+  def identifier_for(_identifier)
+    raise NotImplementedError, "#{self.class} must implement #identifier_for"
+  end
+end
+```
+
+## Related
+
+- [Configuration](/api/configuration) - Configure the adapter
+- [FixtureKit.define](/api/define) - Define fixtures that run through adapters
+- [Errors](/api/errors) - Error handling reference

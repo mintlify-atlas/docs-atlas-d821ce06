@@ -1,80 +1,363 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Create your first FixtureKit fixture in 5 minutes
 ---
 
-## Get started in three steps
+# Quickstart
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+This guide will take you from zero to a working fixture in just a few steps.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  Make sure you've completed [Installation](/installation) before starting this guide.
 </Note>
+
+## Overview
+
+You'll learn how to:
+
+1. Define a fixture with test data
+2. Load the fixture in your tests
+3. Access exposed records
+4. Verify SQL caching is working
+
+<Steps>
+  <Step title="Create a fixture definition">
+    Fixtures are Ruby files that define test data. Create your first fixture:
+
+    <Tabs>
+      <Tab title="RSpec">
+        Create `spec/fixture_kit/project_management.rb`:
+
+        ```ruby spec/fixture_kit/project_management.rb
+        FixtureKit.define do
+          # Create a user
+          owner = User.create!(name: "Alice", email: "alice@example.com")
+          
+          # Create a project owned by that user
+          project = Project.create!(name: "Roadmap", owner: owner)
+          
+          # Expose records for use in tests
+          expose(owner: owner, project: project)
+        end
+        ```
+      </Tab>
+      
+      <Tab title="Minitest">
+        Create `test/fixture_kit/project_management.rb`:
+
+        ```ruby test/fixture_kit/project_management.rb
+        FixtureKit.define do
+          # Create a user
+          owner = User.create!(name: "Alice", email: "alice@example.com")
+          
+          # Create a project owned by that user
+          project = Project.create!(name: "Roadmap", owner: owner)
+          
+          # Expose records for use in tests
+          expose(owner: owner, project: project)
+        end
+        ```
+      </Tab>
+    </Tabs>
+
+    <Note>
+      The `expose()` method makes records available in your tests. Any records you don't expose won't be accessible via the `fixture` object (but they still exist in the database).
+    </Note>
+
+    ### Key Points
+
+    - Use any Ruby code: `create!`, FactoryBot, or plain ActiveRecord
+    - Create relationships just like you would in normal code
+    - Call `expose()` with a hash of `name: record` pairs
+    - You can expose single records or arrays of records
+  </Step>
+
+  <Step title="Use the fixture in tests">
+    Now declare the fixture in your test and access the exposed records:
+
+    <Tabs>
+      <Tab title="RSpec">
+        ```ruby spec/models/project_spec.rb
+        RSpec.describe Project do
+          # Declare which fixture to load
+          fixture "project_management"
+
+          it "loads exposed records" do
+            # Access records via the fixture object
+            expect(fixture.project.name).to eq("Roadmap")
+            expect(fixture.owner.name).to eq("Alice")
+          end
+
+          it "maintains relationships" do
+            expect(fixture.project.owner).to eq(fixture.owner)
+          end
+
+          it "isolates data between tests" do
+            # Each test gets fresh fixture data
+            expect(Project.count).to eq(1)
+            
+            # This won't affect the next test
+            Project.create!(name: "Temporary", owner: fixture.owner)
+            expect(Project.count).to eq(2)
+          end
+        end
+        ```
+
+        Run your tests:
+
+        ```bash
+        bundle exec rspec spec/models/project_spec.rb
+        ```
+      </Tab>
+      
+      <Tab title="Minitest">
+        ```ruby test/models/project_test.rb
+        class ProjectTest < ActiveSupport::TestCase
+          # Declare which fixture to load
+          fixture "project_management"
+
+          test "loads exposed records" do
+            # Access records via the fixture object
+            assert_equal "Roadmap", fixture.project.name
+            assert_equal "Alice", fixture.owner.name
+          end
+
+          test "maintains relationships" do
+            assert_equal fixture.owner, fixture.project.owner
+          end
+
+          test "isolates data between tests" do
+            # Each test gets fresh fixture data
+            assert_equal 1, Project.count
+            
+            # This won't affect the next test
+            Project.create!(name: "Temporary", owner: fixture.owner)
+            assert_equal 2, Project.count
+          end
+        end
+        ```
+
+        Run your tests:
+
+        ```bash
+        bundle exec rails test test/models/project_test.rb
+        ```
+      </Tab>
+    </Tabs>
+
+    ### How It Works
+
+    - **First run**: FixtureKit executes your fixture definition and captures all SQL INSERT statements
+    - **Subsequent runs**: FixtureKit replays the cached SQL instantly
+    - **Each test**: Gets a fresh copy of the data via transactional rollback
+  </Step>
+
+  <Step title="Verify SQL caching">
+    Check that FixtureKit created a cache file:
+
+    ```bash
+    ls tmp/cache/fixture_kit/
+    ```
+
+    You should see `project_management.json`. This file contains the cached SQL statements.
+
+    <Tabs>
+      <Tab title="RSpec">
+        Run your tests again:
+
+        ```bash
+        bundle exec rspec spec/models/project_spec.rb
+        ```
+
+        The second run should be noticeably faster. FixtureKit is now replaying cached SQL instead of executing your fixture definition.
+      </Tab>
+      
+      <Tab title="Minitest">
+        Run your tests again:
+
+        ```bash
+        bundle exec rails test test/models/project_test.rb
+        ```
+
+        The second run should be noticeably faster. FixtureKit is now replaying cached SQL instead of executing your fixture definition.
+      </Tab>
+    </Tabs>
+
+    <Note>
+      The cache automatically invalidates when you modify the fixture definition file. FixtureKit will regenerate the cache on the next run.
+    </Note>
+  </Step>
+
+  <Step title="Add more complexity (optional)">
+    Expand your fixture with more records and relationships:
+
+    ```ruby
+    FixtureKit.define do
+      # Create multiple users
+      alice = User.create!(name: "Alice", email: "alice@example.com")
+      bob = User.create!(name: "Bob", email: "bob@example.com")
+      charlie = User.create!(name: "Charlie", email: "charlie@example.com")
+
+      # Create a project
+      project = Project.create!(name: "Web App Redesign", owner: alice)
+
+      # Create multiple tasks
+      design_task = Task.create!(
+        title: "Design new homepage",
+        project: project,
+        assignee: charlie
+      )
+
+      api_task = Task.create!(
+        title: "Build REST API",
+        project: project,
+        assignee: bob
+      )
+
+      # Expose arrays too
+      all_users = [alice, bob, charlie]
+      all_tasks = [design_task, api_task]
+
+      expose(
+        alice: alice,
+        bob: bob,
+        charlie: charlie,
+        project: project,
+        design_task: design_task,
+        api_task: api_task,
+        all_users: all_users,
+        all_tasks: all_tasks
+      )
+    end
+    ```
+
+    Access arrays in your tests:
+
+    <Tabs>
+      <Tab title="RSpec">
+        ```ruby
+        RSpec.describe Project do
+          fixture "project_management"
+
+          it "exposes arrays" do
+            expect(fixture.all_users).to be_an(Array)
+            expect(fixture.all_users.size).to eq(3)
+            expect(fixture.all_tasks.size).to eq(2)
+          end
+
+          it "loads array elements correctly" do
+            expect(fixture.all_tasks.first.title).to eq("Design new homepage")
+          end
+        end
+        ```
+      </Tab>
+      
+      <Tab title="Minitest">
+        ```ruby
+        class ProjectTest < ActiveSupport::TestCase
+          fixture "project_management"
+
+          test "exposes arrays" do
+            assert_kind_of Array, fixture.all_users
+            assert_equal 3, fixture.all_users.size
+            assert_equal 2, fixture.all_tasks.size
+          end
+
+          test "loads array elements correctly" do
+            assert_equal "Design new homepage", fixture.all_tasks.first.title
+          end
+        end
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+</Steps>
+
+## Common Patterns
+
+### Organize Fixtures in Subdirectories
+
+Keep your fixtures organized by domain:
+
+```
+spec/fixture_kit/
+├── teams/
+│   ├── basic.rb
+│   └── with_admins.rb
+├── projects/
+│   ├── active.rb
+│   └── archived.rb
+└── billing/
+    └── subscription.rb
+```
+
+Reference them with paths:
+
+```ruby
+fixture "teams/basic"
+fixture "projects/active"
+```
+
+### Use FactoryBot Inside Fixtures
+
+FixtureKit works great with FactoryBot:
+
+```ruby
+FixtureKit.define do
+  owner = FactoryBot.create(:user, :admin)
+  project = FactoryBot.create(:project, owner: owner)
+  
+  expose(owner: owner, project: project)
+end
+```
+
+You get FactoryBot's flexibility with fixture-level speed on subsequent runs.
+
+### Anonymous Fixtures
+
+Define fixtures inline for one-off tests:
+
+<Tabs>
+  <Tab title="RSpec">
+    ```ruby
+    RSpec.describe "special case" do
+      fixture do
+        user = User.create!(name: "Special", email: "special@example.com")
+        expose(user: user)
+      end
+
+      it "works" do
+        expect(fixture.user.name).to eq("Special")
+      end
+    end
+    ```
+  </Tab>
+  
+  <Tab title="Minitest">
+    ```ruby
+    class SpecialCaseTest < ActiveSupport::TestCase
+      fixture do
+        user = User.create!(name: "Special", email: "special@example.com")
+        expose(user: user)
+      end
+
+      test "works" do
+        assert_equal "Special", fixture.user.name
+      end
+    end
+    ```
+  </Tab>
+</Tabs>
+
+## What's Next?
+
+You now know the basics of FixtureKit! Here are some next steps:
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="book" href="/api/define">
+    Explore advanced features like fixture inheritance and callbacks
+  </Card>
+  <Card title="Performance Guide" icon="lightbulb" href="/advanced/performance">
+    Learn how to structure fixtures for large test suites
+  </Card>
+</CardGroup>

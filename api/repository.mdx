@@ -1,0 +1,159 @@
+---
+title: 'Repository'
+description: 'Access fixture records through the repository interface'
+---
+
+## Overview
+
+The `FixtureKit::Repository` is the object returned when you load a fixture definition in your tests. It provides reader methods for all exposed records and handles lazy loading and memoization.
+
+## How It Works
+
+When a fixture definition is loaded, FixtureKit creates a Repository instance that:
+
+1. **Creates reader methods** for each exposed name
+2. **Lazily loads** records from the database when first accessed
+3. **Memoizes** loaded records for subsequent accesses
+4. **Returns nil** for records that don't exist in the database
+
+## Reader Methods
+
+Each name exposed in your fixture definition becomes a reader method on the repository:
+
+```ruby
+# Definition
+FixtureKit.define do
+  expose(
+    alice: User.create!(name: "Alice"),
+    bob: User.create!(name: "Bob"),
+    posts: Post.create!([{ title: "First" }, { title: "Second" }])
+  )
+end
+
+# In your test
+repo = fixture(:users)
+repo.alice  # => #<User id: 1, name: "Alice">
+repo.bob    # => #<User id: 2, name: "Bob">
+repo.posts  # => [#<Post id: 1, title: "First">, #<Post id: 2, title: "Second">]
+```
+
+## Lazy Loading
+
+Records are not loaded from the database until you access them. The repository stores record information (model class and ID) and performs a `find_by(id: ...)` query when you first call the reader method:
+
+```ruby
+repo = fixture(:users)
+# No database queries yet
+
+user = repo.alice
+# Now: User.find_by(id: 1) was executed
+```
+
+## Memoization
+
+Once a record is loaded, it's cached in memory. Subsequent accesses return the same object instance without additional database queries:
+
+```ruby
+repo = fixture(:users)
+
+user1 = repo.alice  # Database query: User.find_by(id: 1)
+user2 = repo.alice  # No query - returns cached object
+
+user1.object_id == user2.object_id  # => true
+```
+
+## Missing Records
+
+If a record was deleted or doesn't exist in the database, the repository returns `nil`:
+
+```ruby
+repo = fixture(:users)
+repo.alice.destroy!
+
+repo.alice  # => nil
+```
+
+<Note>
+  This can happen if you're using a cached fixture but the database has been reset, or if records are deleted during test execution.
+</Note>
+
+## Array Records
+
+When you expose an array of records, the repository returns a frozen array of loaded records:
+
+```ruby
+# Definition
+FixtureKit.define do
+  users = [User.create!(name: "Alice"), User.create!(name: "Bob")]
+  expose(users: users)
+end
+
+# In test
+repo = fixture(:users)
+users = repo.users  # => [#<User ...>, #<User ...>]
+users.frozen?       # => true
+```
+
+## Implementation Details
+
+The repository uses Ruby's `define_singleton_method` to create reader methods dynamically at initialization:
+
+```ruby
+# From lib/fixture_kit/repository.rb:15-18
+def define_readers
+  @records.each_key do |name|
+    define_singleton_method(name) { fetch(name) }
+  end
+end
+```
+
+Record loading is handled by the `load_record` method:
+
+```ruby
+# From lib/fixture_kit/repository.rb:35-37
+def load_record(record_info)
+  record_info.keys.first.find_by(id: record_info.values.first)
+end
+```
+
+## Examples
+
+### Using Multiple Records
+
+```ruby
+# Definition
+FixtureKit.define do
+  alice = User.create!(name: "Alice")
+  expose(
+    alice: alice,
+    alice_post: Post.create!(author: alice, title: "Hello")
+  )
+end
+
+# Test
+repo = fixture(:users)
+assert_equal "Alice", repo.alice.name
+assert_equal repo.alice, repo.alice_post.author
+```
+
+### Working with Collections
+
+```ruby
+# Definition
+FixtureKit.define do
+  team = Team.create!(name: "Engineering")
+  members = 5.times.map { |i| User.create!(name: "User #{i}", team: team) }
+  expose(team: team, members: members)
+end
+
+# Test
+repo = fixture(:team)
+assert_equal 5, repo.members.count
+assert_equal "Engineering", repo.team.name
+```
+
+## Related
+
+- [FixtureKit.define](/api/define) - Create fixture definitions
+- [Configuration](/api/configuration) - Configure caching behavior
+- [Errors](/api/errors) - Error handling reference

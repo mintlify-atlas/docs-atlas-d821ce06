@@ -1,0 +1,332 @@
+---
+title: "Caching System"
+description: "How FixtureKit's SQL caching works under the hood"
+---
+
+## Overview
+
+FixtureKit's performance comes from its SQL caching system. When you declare a fixture, FixtureKit:
+
+1. Generates the fixture data on first run
+2. Captures all SQL INSERT statements
+3. Saves them to a JSON cache file
+4. On subsequent runs, replays those SQL statements directly
+
+This eliminates the overhead of re-running factory logic, validations, callbacks, and association setup on every test run.
+
+## How Caching Works
+
+When you use a fixture in your tests, FixtureKit follows this flow:
+
+<Steps>
+  <Step title="Check for cache">
+    FixtureKit looks for a cache file at `<cache_path>/<identifier>.json`
+  </Step>
+  
+  <Step title="Generate if missing">
+    If no cache exists, FixtureKit runs your fixture definition block and captures all created models
+  </Step>
+  
+  <Step title="Save SQL statements">
+    Generates INSERT statements for all touched models and writes them to the cache file
+  </Step>
+  
+  <Step title="Load from cache">
+    On subsequent runs, executes the cached SQL directly via `execute_batch`
+  </Step>
+  
+  <Step title="Return repository">
+    Creates a `Repository` object with methods for accessing exposed records
+  </Step>
+</Steps>
+
+## Cache Identifiers and Paths
+
+Cache files are stored using a predictable identifier-based structure.
+
+### Named Fixtures
+
+For named fixtures, the identifier is simply the fixture name:
+
+```ruby
+# Declaration
+fixture "teams/basic"
+
+# Cache path
+tmp/cache/fixture_kit/teams/basic.json
+```
+
+### Anonymous Fixtures
+
+For inline fixture blocks, the identifier is derived from the test class/context:
+
+```ruby
+# RSpec example
+RSpec.describe "MyFeature" do
+  describe "with fixture_kit" do
+    fixture { User.create!(name: "Alice"); expose(user: user) }
+  end
+end
+
+# Cache path
+tmp/cache/fixture_kit/_anonymous/my_feature/with_fixture_kit.json
+```
+
+```ruby
+# Minitest example  
+class MyFeatureTest < ActiveSupport::TestCase
+  fixture { User.create!(name: "Alice"); expose(user: user) }
+end
+
+# Cache path
+tmp/cache/fixture_kit/_anonymous/my_feature_test.json
+```
+
+<Note>
+  Anonymous fixtures are automatically prefixed with `_anonymous/` and the identifier is normalized by the adapter (RSpec or Minitest).
+</Note>
+
+## Cache File Format
+
+Cache files are JSON documents containing SQL statements and exposed record metadata.
+
+### Structure
+
+```json
+{
+  "records": {
+    "User": "INSERT INTO users (id, name, email, created_at, updated_at) VALUES (1, 'Alice', 'alice@example.com', '2026-03-03 10:00:00', '2026-03-03 10:00:00')",
+    "Project": "INSERT INTO projects (id, name, owner_id, created_at, updated_at) VALUES (1, 'Roadmap', 1, '2026-03-03 10:00:00', '2026-03-03 10:00:00')"
+  },
+  "exposed": {
+    "owner": {
+      "User": 1
+    },
+    "project": {
+      "Project": 1
+    }
+  }
+}
+```
+
+### Components
+
+**records**: A hash mapping model class names to SQL INSERT statements. Each statement recreates all rows for that model.
+
+**exposed**: A hash mapping exposed names to model class and ID. Used to lazily load exposed records in tests via `fixture.name`.
+
+<Tip>
+  Cache files are human-readable JSON. You can inspect them to debug fixture data or understand what's being cached.
+</Tip>
+
+## Cache Loading Process
+
+When loading a cache, FixtureKit:
+
+1. Reads and parses the JSON file
+2. Groups SQL statements by database connection
+3. For each connection:
+   - Disables referential integrity
+   - Deletes existing rows from each table
+   - Executes INSERT statements via `execute_batch`
+   - Re-enables referential integrity
+4. Creates a `Repository` with exposed record metadata
+
+From lib/fixture_kit/cache.rb:46:
+
+```ruby
+statements_by_connection(data.records).each do |connection, statements|
+  connection.disable_referential_integrity do
+    connection.__send__(:execute_batch, statements, "FixtureKit Load")
+  end
+end
+```
+
+<Warning>
+  Cache loading uses `execute_batch`, which is a private Rails API. FixtureKit is tested against supported Rails versions but this may require updates in future Rails releases.
+</Warning>
+
+## Cache Invalidation
+
+FixtureKit automatically clears the cache directory when the test suite starts, unless you explicitly preserve it.
+
+### Default Behavior
+
+On every test run, FixtureKit deletes all cache files and regenerates them. This ensures:
+
+- Schema changes are picked up immediately
+- Factory changes are reflected in fixtures
+- Stale cache data doesn't cause flaky tests
+
+### Preserving Cache
+
+Set the `FIXTURE_KIT_PRESERVE_CACHE` environment variable to skip cache clearing:
+
+```bash
+FIXTURE_KIT_PRESERVE_CACHE=1 rspec
+```
+
+Truthy values (case-insensitive): `1`, `true`, `yes`
+
+<Tip>
+  Use `FIXTURE_KIT_PRESERVE_CACHE=1` during development to speed up test runs when you know your fixtures haven't changed.
+</Tip>
+
+<Warning>
+  If you preserve cache and then change your fixture definitions or database schema, you'll get stale data or errors. Manually clear the cache when making changes.
+</Warning>
+
+## Manually Clearing Cache
+
+Delete the cache directory to force regeneration:
+
+```bash
+rm -rf tmp/cache/fixture_kit
+```
+
+Or remove specific fixture caches:
+
+```bash
+# Clear a named fixture
+rm tmp/cache/fixture_kit/teams/basic.json
+
+# Clear anonymous fixtures
+rm -rf tmp/cache/fixture_kit/_anonymous
+```
+
+## Cache Configuration
+
+Customize the cache directory in your test setup:
+
+```ruby
+FixtureKit.configure do |config|
+  config.cache_path = "tmp/test_cache/fixtures"
+end
+```
+
+<Note>
+  The default cache path is `tmp/cache/fixture_kit`. This directory should be added to `.gitignore`.
+</Note>
+
+## Named vs Anonymous Fixture Caching
+
+### Named Fixtures
+
+- **Shared cache**: Multiple test files using the same named fixture share one cache file
+- **Persistent identifier**: Cache survives across test runs (unless cache is cleared)
+- **Best for**: Fixtures reused across many test files
+
+```ruby
+# Both test files share tmp/cache/fixture_kit/teams/basic.json
+fixture "teams/basic"
+```
+
+### Anonymous Fixtures
+
+- **Scoped cache**: Each test class/context gets its own cache file
+- **Memory cleared**: Cache data is cleared from memory after each test to prevent leaks
+- **Best for**: One-off fixture data specific to a single test file
+
+```ruby
+fixture do
+  user = User.create!(name: "Test")
+  expose(user: user)
+end
+```
+
+From lib/fixture_kit/fixture.rb:40:
+
+```ruby
+def finish
+  @cache.clear_memory if anonymous?
+end
+```
+
+## Multi-Database Support
+
+FixtureKit automatically handles fixtures that span multiple databases:
+
+```ruby
+FixtureKit.define do
+  # Primary database
+  user = User.create!(name: "Alice")
+  
+  # Analytics database
+  event = AnalyticsEvent.create!(user_id: user.id, action: "login")
+  
+  expose(user: user, event: event)
+end
+```
+
+The cache system:
+- Groups SQL statements by connection
+- Executes each group against its appropriate database
+- Maintains referential integrity within each database
+
+From lib/fixture_kit/cache.rb:113:
+
+```ruby
+def statements_by_connection(records)
+  records.each_with_object({}) do |(model, sql), grouped|
+    connection = model.connection
+    grouped[connection] ||= []
+    # ... group statements by connection
+  end
+end
+```
+
+## Cache Generation Callbacks
+
+Monitor cache operations using callbacks:
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_save { |identifier| puts "Generating #{identifier}..." }
+  config.on_cache_saved { |identifier, duration| puts "Saved #{identifier} in #{duration}s" }
+  
+  config.on_cache_mount { |identifier| puts "Loading #{identifier}..." }
+  config.on_cache_mounted { |identifier, duration| puts "Loaded #{identifier} in #{duration}s" }
+end
+```
+
+See the [Callbacks reference](/guides/callbacks) for details.
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="CacheMissingError when cache should exist">
+    This usually means:
+    - Cache was cleared but fixture hasn't regenerated
+    - Cache path configuration changed
+    - File permissions issue
+    
+    **Solution**: Check the expected cache path and verify the file exists. Clear and regenerate cache if needed.
+  </Accordion>
+  
+  <Accordion title="Stale data in tests">
+    You're likely using `FIXTURE_KIT_PRESERVE_CACHE=1` with changed fixture definitions.
+    
+    **Solution**: Clear the cache directory and re-run tests without the preserve flag.
+  </Accordion>
+  
+  <Accordion title="Cache files are huge">
+    Large cache files indicate your fixture creates many records. Consider:
+    - Splitting into smaller, more focused fixtures
+    - Using fixture composition with `extends`
+    - Reviewing if all created data is necessary
+    
+    **Solution**: Check cache file size with `ls -lh tmp/cache/fixture_kit/` and optimize fixture definitions.
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Performance Guide" icon="gauge-high" href="/advanced/performance">
+    Learn how to maximize FixtureKit's speed benefits
+  </Card>
+  
+  <Card title="Troubleshooting" icon="wrench" href="/advanced/troubleshooting">
+    Solutions for common cache-related issues
+  </Card>
+</CardGroup>

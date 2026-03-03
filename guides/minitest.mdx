@@ -1,0 +1,358 @@
+---
+title: Minitest Integration
+description: Complete guide to using FixtureKit with Minitest and Rails
+---
+
+FixtureKit provides seamless integration with Minitest through automatic configuration with ActiveSupport::TestCase.
+
+## Installation
+
+FixtureKit automatically configures itself for Minitest when you require it:
+
+```ruby
+# test/test_helper.rb
+require "fixture_kit/minitest"
+```
+
+The integration automatically:
+- Sets the default fixture path to `test/fixture_kit`
+- Configures the Minitest adapter
+- Extends test classes with the `fixture` class method
+- Includes fixture instance methods in all tests
+
+## Basic Usage
+
+### Named Fixtures
+
+Declare a fixture by name in your test class:
+
+```ruby
+class UserTest < ActiveSupport::TestCase
+  fixture "teams/basic"
+
+  test "has users" do
+    assert_equal "Alice", fixture.alice.name
+    assert_equal "alice@team.test", fixture.alice.email
+  end
+end
+```
+
+The fixture file would be located at `test/fixture_kit/teams/basic.rb`:
+
+```ruby
+# test/fixture_kit/teams/basic.rb
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@team.test", role: "admin")
+  bob = User.create!(name: "Bob", email: "bob@team.test")
+
+  expose(
+    alice: alice,
+    bob: bob
+  )
+end
+```
+
+### Anonymous Fixtures
+
+Define fixtures inline using a block:
+
+```ruby
+class UserAnalyticsTest < ActiveSupport::TestCase
+  fixture do
+    user = User.create!(name: "Test User", email: "test@example.com")
+    expose(user: user)
+  end
+
+  test "tracks user activity" do
+    assert_equal "Test User", fixture.user.name
+  end
+end
+```
+
+Anonymous fixtures are cached in the `_anonymous` directory with a path derived from the test class name.
+
+## Fixture Declaration
+
+### Class-Level Declaration
+
+The `fixture` method is available in all ActiveSupport::TestCase subclasses:
+
+```ruby
+class ProjectTest < ActiveSupport::TestCase
+  fixture "project_management"
+
+  test "has projects" do
+    assert_equal "Web App Redesign", fixture.web_app.name
+    assert_equal "Mobile App", fixture.mobile_app.name
+  end
+end
+```
+
+### Test Class Inheritance
+
+Fixture declarations can be overridden in subclasses:
+
+```ruby
+class BaseTeamTest < ActiveSupport::TestCase
+  fixture "teams/basic"
+end
+
+class BasicTeamTest < BaseTeamTest
+  test "has basic team members" do
+    assert_equal 2, User.count
+  end
+end
+
+class ExtendedTeamTest < BaseTeamTest
+  fixture "project_management"  # Override parent fixture
+
+  test "has project team members" do
+    assert_equal 3, User.count
+    assert_equal "Alice Chen", fixture.alice.name
+  end
+end
+```
+
+### Fixture Inheritance
+
+Extend existing fixtures to build on their data:
+
+```ruby
+class TaskTest < ActiveSupport::TestCase
+  fixture(extends: "teams/basic") do
+    project = Project.create!(name: "New Project", owner: parent.alice)
+    task = Task.create!(title: "Build feature", project: project)
+
+    expose(
+      project: project,
+      task: task
+    )
+  end
+
+  test "creates tasks with inherited users" do
+    assert_equal fixture.parent.alice, fixture.task.project.owner
+    assert_equal 2, User.count  # From parent fixture
+    assert_equal 1, Project.count
+  end
+end
+```
+
+Access parent fixture data through the `parent` method.
+
+## Accessing Fixtures
+
+The `fixture` instance method is available in all test methods:
+
+```ruby
+class ProjectTest < ActiveSupport::TestCase
+  fixture "project_management"
+
+  test "exposes individual records" do
+    assert_equal "Alice Chen", fixture.alice.name
+    assert_equal "active", fixture.web_app.status
+  end
+
+  test "exposes arrays" do
+    assert_kind_of Array, fixture.mobile_tasks
+    assert_equal 3, fixture.mobile_tasks.size
+  end
+
+  test "returns database records" do
+    assert_instance_of User, fixture.alice
+    assert fixture.alice.persisted?
+  end
+end
+```
+
+Calling `fixture` without a declaration raises an error:
+
+```ruby
+class NoFixtureTest < ActiveSupport::TestCase
+  test "raises helpful error" do
+    error = assert_raises(RuntimeError) { fixture }
+    assert_equal(
+      "No fixture declared for this test class. Use `fixture \"name\"` in your test class.",
+      error.message
+    )
+  end
+end
+```
+
+## Transactional Tests
+
+<Warning>
+FixtureKit requires Minitest's `use_transactional_tests` to be enabled. This ensures that database changes in each test are rolled back.
+</Warning>
+
+In your test helper:
+
+```ruby
+# test/test_helper.rb
+class ActiveSupport::TestCase
+  self.use_transactional_tests = true
+end
+```
+
+Fixtures are loaded **before** transactional rollback begins, so they persist across all tests using the same fixture declaration.
+
+## Execution Order
+
+FixtureKit fixtures are loaded in a specific order to ensure consistency:
+
+<Steps>
+  <Step title="Suite start">
+    The runner starts when the first test class with a fixture runs
+  </Step>
+
+  <Step title="Before suite">
+    Cache directory is cleared (unless `FIXTURE_KIT_PRESERVE_CACHE` is set)
+  </Step>
+
+  <Step title="Before test class runs">
+    The fixture is generated and cached (if not already cached)
+  </Step>
+
+  <Step title="Before each test">
+    The cached fixture data is mounted into the database in the `setup` phase
+  </Step>
+
+  <Step title="User setup hooks">
+    Your `setup` methods execute with fixture data already loaded
+  </Step>
+
+  <Step title="Test execution">
+    Your test runs with fixture data available via `fixture.method_name`
+  </Step>
+
+  <Step title="After test class">
+    Anonymous fixtures have their in-memory cache cleared
+  </Step>
+</Steps>
+
+```ruby
+class UserTest < ActiveSupport::TestCase
+  fixture "teams/basic"
+
+  setup do
+    @user_count = User.count
+  end
+
+  test "has fixtures loaded before setup" do
+    assert_equal 2, @user_count  # Fixtures already loaded!
+  end
+end
+```
+
+## Using Helper Methods
+
+Anonymous fixtures can access test helper methods during generation:
+
+```ruby
+class TimeDependentTest < ActiveSupport::TestCase
+  fixture do
+    helper_email = custom_helper_method
+    user = User.create!(name: "Helper User", email: helper_email)
+    expose(helper_user: user)
+  end
+
+  test "uses custom helpers" do
+    assert_equal "helper.fixture@example.com", fixture.helper_user.email
+  end
+
+  private
+
+  def custom_helper_method
+    "helper.fixture@example.com"
+  end
+end
+```
+
+## Configuration
+
+Customize the fixture path:
+
+```ruby
+# test/test_helper.rb
+FixtureKit.runner.configuration.fixture_path = "test/fixtures"
+FixtureKit.runner.configuration.cache_path = "tmp/fixture_cache"
+```
+
+See the [Configuration](/guides/configuration) guide for all available options.
+
+## Multiple Database Support
+
+FixtureKit works seamlessly with Rails multi-database configurations:
+
+```ruby
+class MultiDatabaseTest < ActiveSupport::TestCase
+  fixture "project_management"
+
+  test "loads records across multiple databases" do
+    # Primary database
+    assert_equal 3, User.count
+    assert_equal 2, Project.count
+    assert_equal 5, Task.count
+
+    # Analytics database
+    assert_equal 2, ActivityLog.count
+    assert_equal 3, TimeEntry.count
+  end
+
+  test "exposes records from all databases" do
+    # Primary database records
+    assert_equal "Alice Chen", fixture.alice.name
+    assert_equal "Web App Redesign", fixture.web_app.name
+
+    # Analytics database records
+    assert_equal 4.5, fixture.design_time.hours
+    assert_equal 2, fixture.api_time_entries.size
+  end
+end
+```
+
+## Multiple Fixtures Error
+
+<Warning>
+You cannot declare multiple fixtures in the same test class. Each class can have only one fixture declaration.
+</Warning>
+
+```ruby
+class InvalidTest < ActiveSupport::TestCase
+  fixture "teams/basic"
+  fixture "project_management"  # Raises FixtureKit::MultipleFixtures!
+end
+```
+
+Use separate test classes to test with different fixtures:
+
+```ruby
+class BasicTeamTest < ActiveSupport::TestCase
+  fixture "teams/basic"
+
+  test "basic team scenario" do
+    # tests...
+  end
+end
+
+class ProjectTeamTest < ActiveSupport::TestCase
+  fixture "project_management"
+
+  test "project team scenario" do
+    # tests...
+  end
+end
+```
+
+## Parallel Testing
+
+FixtureKit is compatible with Rails' parallel testing:
+
+```ruby
+# test/test_helper.rb
+class ActiveSupport::TestCase
+  parallelize(workers: :number_of_processors)
+  self.use_transactional_tests = true
+end
+```
+
+Each parallel worker maintains its own database and cache, ensuring test isolation.

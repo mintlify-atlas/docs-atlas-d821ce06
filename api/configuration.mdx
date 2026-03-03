@@ -1,0 +1,233 @@
+---
+title: 'Configuration'
+description: 'Configure FixtureKit behavior and settings'
+---
+
+## Overview
+
+The `FixtureKit::Configuration` class manages global settings for FixtureKit. Access configuration through the `FixtureKit.configure` block.
+
+## Configuration Block
+
+```ruby
+FixtureKit.configure do |config|
+  config.fixture_path = "spec/fixtures"
+  config.cache_path = "tmp/fixture_cache"
+  config.adapter(FixtureKit::RSpecAdapter)
+end
+```
+
+## Settings
+
+### fixture_path
+
+The directory where fixture definition files are located.
+
+<ParamField path="fixture_path" type="String" default="'fixture_kit'">
+  Path to the directory containing fixture definitions, relative to your project root.
+</ParamField>
+
+```ruby
+FixtureKit.configure do |config|
+  config.fixture_path = "spec/fixtures"
+end
+```
+
+### cache_path
+
+The directory where FixtureKit stores cached fixture data.
+
+<ParamField path="cache_path" type="String" default="'tmp/cache/fixture_kit'">
+  Path to the cache directory where fixture snapshots are stored.
+</ParamField>
+
+```ruby
+FixtureKit.configure do |config|
+  config.cache_path = "tmp/test_fixtures"
+end
+```
+
+<Note>
+  The cache directory should be in your `.gitignore` as it contains generated fixture data.
+</Note>
+
+### adapter
+
+Specifies which test framework adapter to use.
+
+#### Getter Behavior
+
+When called with no arguments, returns the current adapter class:
+
+```ruby
+FixtureKit.configure do |config|
+  config.adapter  # => FixtureKit::MinitestAdapter (default)
+end
+```
+
+#### Setter Behavior
+
+When called with an adapter class and optional options, sets the adapter:
+
+```ruby
+FixtureKit.configure do |config|
+  config.adapter(FixtureKit::RSpecAdapter)
+  # Or with options:
+  config.adapter(FixtureKit::RSpecAdapter, example_group: MyCustomGroup)
+end
+```
+
+<ParamField path="adapter_class" type="Class" default="FixtureKit::MinitestAdapter">
+  The adapter class to use. Must be a subclass of `FixtureKit::Adapter`.
+</ParamField>
+
+<ParamField path="**options" type="Hash" default="{}">
+  Optional configuration passed to the adapter's initializer.
+</ParamField>
+
+#### Available Adapters
+
+- `FixtureKit::MinitestAdapter` - For Minitest (default)
+- `FixtureKit::RSpecAdapter` - For RSpec
+- Custom adapters - Subclass `FixtureKit::Adapter`
+
+### adapter_options
+
+Read-only accessor for options passed to the adapter:
+
+```ruby
+FixtureKit.configure do |config|
+  config.adapter(FixtureKit::RSpecAdapter, verbose: true)
+  config.adapter_options  # => { verbose: true }
+end
+```
+
+<ResponseField name="adapter_options" type="Hash">
+  The options hash passed to the adapter initializer.
+</ResponseField>
+
+## Callback Methods
+
+Register callbacks for cache lifecycle events.
+
+### on_cache_save
+
+Called before saving a fixture to the cache.
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_save do |definition_name|
+    puts "Saving fixture: #{definition_name}"
+  end
+end
+```
+
+<ParamField path="block" type="Proc" required>
+  Block to execute before saving. Receives the fixture definition name as an argument.
+</ParamField>
+
+### on_cache_saved
+
+Called after a fixture has been saved to the cache.
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_saved do |definition_name|
+    puts "Saved fixture: #{definition_name}"
+  end
+end
+```
+
+<ParamField path="block" type="Proc" required>
+  Block to execute after saving. Receives the fixture definition name as an argument.
+</ParamField>
+
+### on_cache_mount
+
+Called before mounting (loading) a cached fixture.
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_mount do |definition_name|
+    puts "Mounting fixture: #{definition_name}"
+  end
+end
+```
+
+<ParamField path="block" type="Proc" required>
+  Block to execute before mounting. Receives the fixture definition name as an argument.
+</ParamField>
+
+### on_cache_mounted
+
+Called after a cached fixture has been mounted.
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_mounted do |definition_name|
+    puts "Mounted fixture: #{definition_name}"
+  end
+end
+```
+
+<ParamField path="block" type="Proc" required>
+  Block to execute after mounting. Receives the fixture definition name as an argument.
+</ParamField>
+
+## Complete Example
+
+```ruby
+# config/initializers/fixture_kit.rb (Rails)
+# or spec/spec_helper.rb / test/test_helper.rb
+
+FixtureKit.configure do |config|
+  # Set paths
+  config.fixture_path = "spec/fixtures"
+  config.cache_path = "tmp/fixture_cache"
+
+  # Configure adapter
+  config.adapter(FixtureKit::RSpecAdapter)
+
+  # Register callbacks
+  config.on_cache_save do |name|
+    Rails.logger.info "Caching fixture: #{name}"
+  end
+
+  config.on_cache_mounted do |name|
+    Rails.logger.info "Loaded fixture: #{name}"
+  end
+end
+```
+
+## Implementation Details
+
+Configuration is initialized with defaults:
+
+```ruby
+# From lib/fixture_kit/configuration.rb:9-15
+def initialize
+  @fixture_path = "fixture_kit"
+  @cache_path = "tmp/cache/fixture_kit"
+  @adapter_class = FixtureKit::MinitestAdapter
+  @adapter_options = {}
+  @callbacks = Callbacks.new
+end
+```
+
+The `adapter` method behaves as both getter and setter:
+
+```ruby
+# From lib/fixture_kit/configuration.rb:17-22
+def adapter(adapter_class = nil, **options)
+  return @adapter_class if adapter_class.nil? && options.empty?
+
+  @adapter_class = adapter_class
+  @adapter_options = options
+end
+```
+
+## Related
+
+- [Adapters](/api/adapters) - Learn about test framework adapters
+- [FixtureKit.define](/api/define) - Define fixtures
+- [Repository](/api/repository) - Access fixture records

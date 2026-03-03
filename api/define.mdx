@@ -1,0 +1,124 @@
+---
+title: 'FixtureKit.define'
+description: 'Define reusable fixtures with the define method'
+---
+
+## Overview
+
+The `FixtureKit.define` method creates a fixture definition that can be loaded and used in your tests. Definitions are Ruby blocks that execute in a test context and expose database records.
+
+## Method Signature
+
+```ruby
+FixtureKit.define(extends: nil, &block) → FixtureKit::Definition
+```
+
+<ParamField path="extends" type="FixtureKit::Definition" default="nil">
+  Optional parent definition to inherit exposed records from. When provided, the child definition inherits all records from the parent and can add or override them.
+</ParamField>
+
+<ParamField path="block" type="Proc" required>
+  The definition block that runs in a test context. Use the `expose` method within this block to make records available.
+</ParamField>
+
+<ResponseField name="return" type="FixtureKit::Definition">
+  A Definition object that can be registered with FixtureKit and loaded in tests.
+</ResponseField>
+
+## Definition Block API
+
+Within the definition block, you have access to:
+
+### expose(**records)
+
+Exposes one or more records by name, making them accessible in the repository.
+
+```ruby
+expose(user: User.create!(name: "Alice"))
+expose(
+  admin: User.create!(name: "Admin", role: "admin"),
+  post: Post.create!(title: "Hello World")
+)
+```
+
+<ParamField path="**records" type="Hash" required>
+  A hash where keys are the names to expose (symbols) and values are Active Record objects or arrays of objects.
+</ParamField>
+
+<Warning>
+  If you attempt to expose a name that's already been exposed, `FixtureKit::DuplicateNameError` will be raised.
+</Warning>
+
+## Examples
+
+### Basic Definition
+
+```ruby
+users = FixtureKit.define do
+  expose(
+    alice: User.create!(name: "Alice", email: "alice@example.com"),
+    bob: User.create!(name: "Bob", email: "bob@example.com")
+  )
+end
+```
+
+### Definition with Inheritance
+
+Child definitions can extend parent definitions, inheriting all exposed records:
+
+```ruby
+base_users = FixtureKit.define do
+  expose(alice: User.create!(name: "Alice"))
+end
+
+users_with_posts = FixtureKit.define(extends: base_users) do
+  # 'alice' is available from parent
+  expose(post: Post.create!(author: alice, title: "My Post"))
+end
+```
+
+### Exposing Arrays
+
+You can expose multiple records under a single name:
+
+```ruby
+FixtureKit.define do
+  users = 3.times.map { |i| User.create!(name: "User #{i}") }
+  expose(users: users)
+end
+```
+
+### Accessing Parent Records
+
+When using `extends:`, the parent repository is available via the `parent` method:
+
+```ruby
+base = FixtureKit.define do
+  expose(user: User.create!(name: "Alice"))
+end
+
+child = FixtureKit.define(extends: base) do
+  # Access parent's user record
+  expose(post: Post.create!(author: parent.user))
+end
+```
+
+## Errors
+
+### DuplicateNameError
+
+Raised when attempting to expose the same name twice within a definition:
+
+```ruby
+FixtureKit.define do
+  expose(user: User.create!(name: "Alice"))
+  expose(user: User.create!(name: "Bob"))  # Raises DuplicateNameError
+end
+# => FixtureKit::DuplicateNameError: Name user already exposed
+```
+
+## Related
+
+- [Repository](/api/repository) - Access exposed records in tests
+- [Configuration](/api/configuration) - Configure FixtureKit behavior
+- [Errors](/api/errors) - Complete error reference

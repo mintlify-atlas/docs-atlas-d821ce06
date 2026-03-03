@@ -1,0 +1,412 @@
+---
+title: Callbacks
+description: Hook into FixtureKit's fixture generation and loading lifecycle
+---
+
+FixtureKit provides callbacks that allow you to hook into the fixture lifecycle for logging, metrics, debugging, and other custom behavior.
+
+## Available Callbacks
+
+FixtureKit supports four callback events:
+
+| Event | Fires | Arguments | Use Case |
+|-------|-------|-----------|----------|
+| `cache_save` | Before fixture generation | `identifier` | Log generation start |
+| `cache_saved` | After fixture generation | `identifier`, `elapsed` | Log generation time |
+| `cache_mount` | Before fixture loading | `identifier` | Log loading start |
+| `cache_mounted` | After fixture loading | `identifier`, `elapsed` | Log loading time |
+
+## Registering Callbacks
+
+### Using Configuration Block
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_save do |identifier|
+    puts "[FixtureKit] Generating: #{identifier}"
+  end
+
+  config.on_cache_saved do |identifier, elapsed|
+    puts "[FixtureKit] Generated #{identifier} in #{elapsed.round(3)}s"
+  end
+
+  config.on_cache_mount do |identifier|
+    puts "[FixtureKit] Loading: #{identifier}"
+  end
+
+  config.on_cache_mounted do |identifier, elapsed|
+    puts "[FixtureKit] Loaded #{identifier} in #{elapsed.round(3)}s"
+  end
+end
+```
+
+### Using RSpec Configuration
+
+```ruby
+RSpec.configure do |config|
+  config.fixture_kit.configuration.on_cache_save do |identifier|
+    Rails.logger.debug "Generating fixture: #{identifier}"
+  end
+
+  config.fixture_kit.configuration.on_cache_saved do |identifier, elapsed|
+    Rails.logger.info "Generated #{identifier} in #{elapsed.round(2)}s"
+  end
+end
+```
+
+## Callback Parameters
+
+### identifier
+
+The fixture identifier (name or anonymous path):
+
+- **Named fixtures**: The fixture name (e.g., `"teams/basic"`, `"project_management"`)
+- **Anonymous fixtures**: Path in the `_anonymous` directory (e.g., `"_anonymous/rspec_example_groups_user_analytics"`)
+
+### elapsed
+
+Time in seconds (as a `Float`) that the operation took:
+
+```ruby
+config.on_cache_saved do |identifier, elapsed|
+  if elapsed > 1.0
+    puts "WARNING: Slow fixture generation for #{identifier}: #{elapsed}s"
+  end
+end
+```
+
+## Callback Events in Detail
+
+### on_cache_save
+
+Fires **before** fixture generation begins.
+
+**When it fires:**
+- After FixtureKit determines the fixture needs to be generated
+- Before the fixture definition block executes
+- Before any database operations occur
+
+**Use cases:**
+- Log when fixture generation starts
+- Track which fixtures are being generated
+- Set up profiling or monitoring
+
+**Example:**
+```ruby
+config.on_cache_save do |identifier|
+  puts "[#{Time.now.strftime('%H:%M:%S')}] Generating: #{identifier}"
+end
+```
+
+**Output:**
+```
+[14:32:15] Generating: teams/basic
+[14:32:15] Generating: project_management
+[14:32:16] Generating: _anonymous/rspec_example_groups_user_test
+```
+
+### on_cache_saved
+
+Fires **after** fixture generation completes.
+
+**When it fires:**
+- After the fixture definition block executes
+- After all database operations are captured
+- After the cache file is written to disk
+
+**Use cases:**
+- Log generation completion and timing
+- Track slow fixture generation
+- Send metrics to monitoring services
+- Verify cache files were created
+
+**Example:**
+```ruby
+config.on_cache_saved do |identifier, elapsed|
+  status = elapsed > 1.0 ? "SLOW" : "OK"
+  puts "[#{status}] Generated #{identifier} in #{elapsed.round(3)}s"
+end
+```
+
+**Output:**
+```
+[OK] Generated teams/basic in 0.234s
+[SLOW] Generated project_management in 1.456s
+[OK] Generated _anonymous/rspec_example_groups_user_test in 0.089s
+```
+
+### on_cache_mount
+
+Fires **before** fixture data is loaded into the database.
+
+**When it fires:**
+- Before reading the cache file
+- Before executing SQL INSERT statements
+- At the start of each test that uses the fixture
+
+**Use cases:**
+- Log when fixtures are being loaded
+- Track fixture usage patterns
+- Debug which fixtures are active
+
+**Example:**
+```ruby
+config.on_cache_mount do |identifier|
+  Rails.logger.debug "Loading fixture: #{identifier}"
+end
+```
+
+### on_cache_mounted
+
+Fires **after** fixture data is loaded into the database.
+
+**When it fires:**
+- After reading the cache file
+- After executing all SQL INSERT statements
+- Before the test runs
+
+**Use cases:**
+- Log loading completion and timing
+- Track slow fixture loading
+- Verify records were inserted
+- Monitor database performance
+
+**Example:**
+```ruby
+config.on_cache_mounted do |identifier, elapsed|
+  if elapsed > 0.1
+    puts "WARNING: Slow fixture load for #{identifier}: #{elapsed}s"
+  end
+end
+```
+
+## Practical Use Cases
+
+### Logging to Rails Logger
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_save do |identifier|
+    Rails.logger.debug { "[FixtureKit] Generating: #{identifier}" }
+  end
+
+  config.on_cache_saved do |identifier, elapsed|
+    Rails.logger.info { "[FixtureKit] Generated #{identifier} in #{elapsed.round(3)}s" }
+  end
+
+  config.on_cache_mount do |identifier|
+    Rails.logger.debug { "[FixtureKit] Loading: #{identifier}" }
+  end
+
+  config.on_cache_mounted do |identifier, elapsed|
+    Rails.logger.debug { "[FixtureKit] Loaded #{identifier} in #{elapsed.round(3)}s" }
+  end
+end
+```
+
+### Performance Monitoring
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_saved do |identifier, elapsed|
+    # Track slow fixture generation
+    if elapsed > 2.0
+      Metrics.increment("fixture.slow_generation", tags: ["fixture:#{identifier}"])
+    end
+
+    # Send timing metric
+    Metrics.timing("fixture.generation_time", elapsed, tags: ["fixture:#{identifier}"])
+  end
+
+  config.on_cache_mounted do |identifier, elapsed|
+    # Track slow fixture loading
+    if elapsed > 0.5
+      Metrics.increment("fixture.slow_load", tags: ["fixture:#{identifier}"])
+    end
+
+    # Send timing metric
+    Metrics.timing("fixture.load_time", elapsed, tags: ["fixture:#{identifier}"])
+  end
+end
+```
+
+### Debugging Fixture Usage
+
+```ruby
+FixtureKit.configure do |config|
+  @fixture_usage = Hash.new(0)
+
+  config.on_cache_mounted do |identifier, _elapsed|
+    @fixture_usage[identifier] += 1
+  end
+
+  at_exit do
+    puts "\n=== Fixture Usage ==="
+    @fixture_usage.sort_by { |_k, v| -v }.each do |fixture, count|
+      puts "#{count.to_s.rjust(4)}x  #{fixture}"
+    end
+  end
+end
+```
+
+**Output:**
+```
+=== Fixture Usage ===
+  45x  teams/basic
+  23x  project_management
+  12x  _anonymous/rspec_example_groups_user_test
+   8x  inheritance/child
+   3x  query_type_events
+```
+
+### CI/CD Integration
+
+```ruby
+if ENV['CI']
+  FixtureKit.configure do |config|
+    config.on_cache_save do |identifier|
+      puts "::group::Generating fixture: #{identifier}"
+    end
+
+    config.on_cache_saved do |identifier, elapsed|
+      puts "Generated in #{elapsed.round(3)}s"
+      puts "::endgroup::"
+    end
+  end
+end
+```
+
+### Conditional Logging
+
+```ruby
+FixtureKit.configure do |config|
+  # Only log in development or when debugging
+  if Rails.env.development? || ENV['FIXTURE_DEBUG']
+    config.on_cache_save do |identifier|
+      puts "\n🔧 Generating: #{identifier}"
+    end
+
+    config.on_cache_saved do |identifier, elapsed|
+      puts "✅ Generated #{identifier} in #{elapsed.round(3)}s"
+    end
+
+    config.on_cache_mount do |identifier|
+      puts "📂 Loading: #{identifier}"
+    end
+
+    config.on_cache_mounted do |identifier, elapsed|
+      puts "✓ Loaded in #{elapsed.round(3)}s"
+    end
+  end
+end
+```
+
+### Cache Verification
+
+```ruby
+FixtureKit.configure do |config|
+  config.on_cache_saved do |identifier, _elapsed|
+    cache_path = FixtureKit.runner.configuration.cache_path
+    cache_file = File.join(cache_path, "#{identifier}.json")
+
+    unless File.exist?(cache_file)
+      raise "Cache file not created for #{identifier} at #{cache_file}"
+    end
+
+    file_size = File.size(cache_file)
+    puts "Cache file created: #{identifier} (#{file_size} bytes)"
+  end
+end
+```
+
+## Multiple Callbacks
+
+You can register multiple callbacks for the same event:
+
+```ruby
+FixtureKit.configure do |config|
+  # Callback 1: Log to stdout
+  config.on_cache_saved do |identifier, elapsed|
+    puts "Generated #{identifier} in #{elapsed}s"
+  end
+
+  # Callback 2: Log to Rails logger
+  config.on_cache_saved do |identifier, elapsed|
+    Rails.logger.info "Fixture cached: #{identifier}"
+  end
+
+  # Callback 3: Send metrics
+  config.on_cache_saved do |identifier, elapsed|
+    Metrics.timing("fixture.generation", elapsed)
+  end
+end
+```
+
+All registered callbacks are called in the order they were registered.
+
+## Error Handling
+
+Callbacks should not raise errors, as they could interrupt fixture generation or loading:
+
+```ruby
+config.on_cache_saved do |identifier, elapsed|
+  begin
+    # Safe to call external service
+    Metrics.timing("fixture.generation", elapsed)
+  rescue => e
+    # Log error but don't interrupt fixture generation
+    Rails.logger.error "Metrics callback failed: #{e.message}"
+  end
+end
+```
+
+## Accessing Callbacks Object
+
+You can access the callbacks registry directly:
+
+```ruby
+# Get all callbacks for an event
+FixtureKit.runner.configuration.callbacks.register(:cache_saved)
+# => [#<Proc:0x00...>, #<Proc:0x00...>]
+
+# Manually trigger callbacks (not recommended)
+FixtureKit.runner.configuration.callbacks.run(:cache_save, "teams/basic")
+```
+
+## Callback Lifecycle Example
+
+Here's the complete order of callbacks for a test run:
+
+```ruby
+RSpec.describe User do
+  fixture "teams/basic"
+
+  it "test" do
+    expect(fixture.alice).to be_present
+  end
+end
+```
+
+**Execution order:**
+
+1. Test suite starts
+2. `on_cache_save("teams/basic")` fires
+3. Fixture definition executes
+4. `on_cache_saved("teams/basic", 0.234)` fires
+5. Test begins
+6. `on_cache_mount("teams/basic")` fires
+7. Cache file loaded into database
+8. `on_cache_mounted("teams/basic", 0.045)` fires
+9. Test runs with fixture data
+10. Test completes
+
+## Best Practices
+
+<Note>
+- Keep callbacks fast to avoid slowing down tests
+- Use callbacks for observability, not business logic
+- Handle errors gracefully in callbacks
+- Use conditional logging (only in CI, development, etc.)
+- Consider callback performance impact when using external services
+- Use block form with Rails logger: `Rails.logger.debug { "message" }` for performance
+</Note>

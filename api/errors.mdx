@@ -1,0 +1,290 @@
+---
+title: 'Errors'
+description: 'Complete reference for FixtureKit error classes'
+---
+
+## Overview
+
+FixtureKit defines a hierarchy of error classes to help identify and debug issues. All errors inherit from `FixtureKit::Error`, which itself inherits from Ruby's `StandardError`.
+
+## Error Hierarchy
+
+```ruby
+StandardError
+└── FixtureKit::Error
+    ├── DuplicateNameError
+    ├── InvalidFixtureDeclaration
+    ├── MultipleFixtures
+    ├── CacheMissingError
+    ├── FixtureDefinitionNotFound
+    ├── RunnerAlreadyStartedError
+    └── CircularFixtureInheritance
+```
+
+## Base Error Class
+
+### FixtureKit::Error
+
+The base class for all FixtureKit-specific errors.
+
+```ruby
+module FixtureKit
+  class Error < StandardError; end
+end
+```
+
+You can rescue all FixtureKit errors with:
+
+```ruby
+begin
+  FixtureKit.define { ... }
+rescue FixtureKit::Error => e
+  puts "FixtureKit error: #{e.message}"
+end
+```
+
+## Error Classes
+
+### DuplicateNameError
+
+Raised when attempting to expose the same name twice within a fixture definition.
+
+**When raised:**
+- Calling `expose` with a name that's already been exposed in the same definition
+
+**Example:**
+
+```ruby
+FixtureKit.define do
+  expose(user: User.create!(name: "Alice"))
+  expose(user: User.create!(name: "Bob"))  # Raises DuplicateNameError
+end
+# => FixtureKit::DuplicateNameError: Name user already exposed
+```
+
+**Source:** `lib/fixture_kit/definition.rb:21`
+
+**Resolution:**
+- Use unique names for each exposed record
+- If you need to replace a record, use a different name or refactor your definition
+
+---
+
+### InvalidFixtureDeclaration
+
+Raised when a fixture declaration is malformed or invalid.
+
+**When raised:**
+- Fixture definition syntax is incorrect
+- Attempting to define a fixture without proper structure
+
+**Example:**
+
+```ruby
+# Invalid fixture declaration
+FixtureKit.define do
+  # Missing expose call or invalid structure
+end
+```
+
+**Resolution:**
+- Ensure your fixture definitions follow the correct syntax
+- Use `expose(**records)` to declare records
+- Check for typos in method names
+
+---
+
+### MultipleFixtures
+
+Raised when multiple fixture definitions are found when only one is expected.
+
+**When raised:**
+- Multiple fixture files match the same test identifier
+- Ambiguous fixture loading scenario
+
+**Example:**
+
+```ruby
+# If you have both:
+# - fixture_kit/users.rb
+# - fixture_kit/users/default.rb
+# And try to load "users" fixture
+```
+
+**Resolution:**
+- Ensure unique fixture file names
+- Organize fixtures in clear directory structures
+- Use explicit fixture names when loading
+
+---
+
+### CacheMissingError
+
+Raised when attempting to load a cached fixture that doesn't exist.
+
+**When raised:**
+- Test tries to use a cached fixture that hasn't been generated
+- Cache directory is missing or was cleared
+- Fixture definition changed after cache was generated
+
+**Example:**
+
+```ruby
+# In test, trying to load cached fixture
+fixture(:users)  # Raises CacheMissingError if cache doesn't exist
+```
+
+**Resolution:**
+- Run the cache generation task: `rake fixture_kit:cache`
+- Ensure `cache_path` is configured correctly
+- Check that cached fixtures haven't been deleted
+- Regenerate cache after changing fixture definitions
+
+---
+
+### FixtureDefinitionNotFound
+
+Raised when a requested fixture definition file cannot be found.
+
+**When raised:**
+- Attempting to load a fixture that doesn't have a corresponding definition file
+- Fixture file path is incorrect
+- Fixture file is in wrong directory
+
+**Example:**
+
+```ruby
+# If fixture_kit/users.rb doesn't exist
+fixture(:users)  # Raises FixtureDefinitionNotFound
+```
+
+**Resolution:**
+- Create the missing fixture definition file
+- Check `fixture_path` configuration
+- Verify file naming matches the fixture name
+- Use correct underscored naming (e.g., `user_posts.rb` for `:user_posts`)
+
+---
+
+### RunnerAlreadyStartedError
+
+Raised when attempting to configure FixtureKit after the runner has already started.
+
+**When raised:**
+- Calling `FixtureKit.configure` after fixtures have been loaded
+- Attempting to change configuration mid-test
+
+**Example:**
+
+```ruby
+# In test
+fixture(:users)  # Starts the runner
+
+FixtureKit.configure do |config|
+  config.cache_path = "new/path"  # Raises RunnerAlreadyStartedError
+end
+```
+
+**Resolution:**
+- Move all `FixtureKit.configure` calls to initialization files
+- Configure FixtureKit before running any tests
+- In Rails: use `config/initializers/fixture_kit.rb`
+- In RSpec: configure in `spec/spec_helper.rb` before example groups
+- In Minitest: configure in `test/test_helper.rb` before tests
+
+---
+
+### CircularFixtureInheritance
+
+Raised when fixture definitions have circular inheritance dependencies.
+
+**When raised:**
+- Fixture A extends Fixture B, which extends Fixture A (direct cycle)
+- Longer inheritance chains that form a cycle (A → B → C → A)
+
+**Example:**
+
+```ruby
+fixture_a = FixtureKit.define { expose(a: User.create!) }
+fixture_b = FixtureKit.define(extends: fixture_a) { expose(b: User.create!) }
+fixture_c = FixtureKit.define(extends: fixture_b) { ... }
+
+# If fixture_a tries to extend fixture_c
+fixture_a = FixtureKit.define(extends: fixture_c) { ... }
+# Raises CircularFixtureInheritance
+```
+
+**Resolution:**
+- Review fixture inheritance chain
+- Ensure fixtures only extend parents, never children
+- Refactor to remove circular dependencies
+- Consider composition over inheritance for complex scenarios
+
+## Error Handling Best Practices
+
+### Rescue Specific Errors
+
+```ruby
+begin
+  fixture(:users)
+rescue FixtureKit::CacheMissingError
+  puts "Cache not found. Run: rake fixture_kit:cache"
+rescue FixtureKit::FixtureDefinitionNotFound => e
+  puts "Fixture file missing: #{e.message}"
+end
+```
+
+### Development vs Production
+
+```ruby
+# In test helper
+begin
+  fixture(:base_data)
+rescue FixtureKit::Error => e
+  if Rails.env.development?
+    Rails.logger.error "FixtureKit error: #{e.class} - #{e.message}"
+    raise e
+  else
+    # Handle gracefully in CI
+    raise e
+  end
+end
+```
+
+### Debugging Errors
+
+All errors include helpful messages. Access them with:
+
+```ruby
+begin
+  FixtureKit.define { ... }
+rescue FixtureKit::Error => e
+  puts "Error class: #{e.class}"
+  puts "Message: #{e.message}"
+  puts "Backtrace:"
+  puts e.backtrace.join("\n")
+end
+```
+
+## Source Reference
+
+All error classes are defined in `lib/fixture_kit.rb:4-11`:
+
+```ruby
+module FixtureKit
+  class Error < StandardError; end
+  class DuplicateNameError < Error; end
+  class InvalidFixtureDeclaration < Error; end
+  class MultipleFixtures < Error; end
+  class CacheMissingError < Error; end
+  class FixtureDefinitionNotFound < Error; end
+  class RunnerAlreadyStartedError < Error; end
+  class CircularFixtureInheritance < Error; end
+end
+```
+
+## Related
+
+- [FixtureKit.define](/api/define) - May raise DuplicateNameError
+- [Configuration](/api/configuration) - May raise RunnerAlreadyStartedError
+- [Repository](/api/repository) - May raise CacheMissingError, FixtureDefinitionNotFound

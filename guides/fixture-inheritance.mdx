@@ -1,0 +1,404 @@
+---
+title: Fixture Inheritance
+description: Build on existing fixtures using FixtureKit's inheritance system
+---
+
+FixtureKit supports fixture inheritance, allowing you to extend existing fixtures with additional data while reusing their records.
+
+## Basic Inheritance
+
+Use the `extends` parameter to inherit from another fixture:
+
+```ruby
+# spec/fixture_kit/inheritance/base.rb
+FixtureKit.define do
+  owner = User.create!(name: "Inheritance Owner", email: "inheritance.owner@example.com")
+
+  expose(owner: owner)
+end
+```
+
+```ruby
+# spec/fixture_kit/inheritance/child.rb
+FixtureKit.define(extends: "inheritance/base") do
+  project = Project.create!(name: "Inherited Project", owner: parent.owner)
+
+  expose(project: project)
+end
+```
+
+In your tests:
+
+```ruby
+RSpec.describe "Inheritance" do
+  fixture "inheritance/child"
+
+  it "includes data from parent fixture" do
+    expect(User.count).to eq(1)  # From parent
+    expect(Project.count).to eq(1)  # From child
+    expect(fixture.project.owner.email).to eq("inheritance.owner@example.com")
+  end
+end
+```
+
+## Accessing Parent Records
+
+Use the `parent` method to access records exposed by the parent fixture:
+
+```ruby
+FixtureKit.define(extends: "inheritance/base") do
+  # Access parent's exposed records
+  project = Project.create!(name: "Child Project", owner: parent.owner)
+  task = Task.create!(title: "Child Task", project: project, assignee: parent.owner)
+
+  expose(
+    project: project,
+    task: task
+  )
+end
+```
+
+The `parent` object behaves like the `fixture` helper in tests:
+
+```ruby
+parent.owner      # Access exposed record from parent
+parent.owner.id   # Access record attributes
+parent.owner.name # Call methods on parent records
+```
+
+## Inheritance Chains
+
+Fixtures can inherit from fixtures that themselves inherit from others:
+
+```ruby
+# spec/fixture_kit/inheritance/base.rb
+FixtureKit.define do
+  owner = User.create!(name: "Base Owner", email: "base@example.com")
+  expose(owner: owner)
+end
+```
+
+```ruby
+# spec/fixture_kit/inheritance/child.rb
+FixtureKit.define(extends: "inheritance/base") do
+  project = Project.create!(name: "Child Project", owner: parent.owner)
+  expose(project: project)
+end
+```
+
+```ruby
+# spec/fixture_kit/inheritance/grandchild.rb
+FixtureKit.define(extends: "inheritance/child") do
+  task = Task.create!(title: "Grandchild Task", project: parent.project)
+  expose(task: task)
+end
+```
+
+Using the grandchild fixture:
+
+```ruby
+RSpec.describe "Multi-level inheritance" do
+  fixture "inheritance/grandchild"
+
+  it "includes all records from inheritance chain" do
+    expect(User.count).to eq(1)        # From base
+    expect(Project.count).to eq(1)     # From child
+    expect(Task.count).to eq(1)        # From grandchild
+
+    expect(fixture.task.project.owner.email).to eq("base@example.com")
+  end
+end
+```
+
+## Parent Records Are Not Auto-Exposed
+
+<Note>
+Important: Parent fixture records are **not** automatically exposed to your tests. Only records explicitly exposed by the child fixture are available via the `fixture` helper.
+</Note>
+
+```ruby
+RSpec.describe "Parent exposure" do
+  fixture "inheritance/child"
+
+  it "only exposes child records" do
+    expect(fixture.project).to be_present  # Exposed by child
+
+    expect { fixture.owner }.to raise_error(NoMethodError)  # Not exposed by child
+  end
+
+  it "can access parent data through associations" do
+    # Access parent records through child associations
+    expect(fixture.project.owner.email).to eq("inheritance.owner@example.com")
+  end
+end
+```
+
+To expose parent records, explicitly expose them in the child:
+
+```ruby
+FixtureKit.define(extends: "inheritance/base") do
+  project = Project.create!(name: "Child Project", owner: parent.owner)
+
+  expose(
+    owner: parent.owner,  # Explicitly expose parent record
+    project: project
+  )
+end
+```
+
+## Inline Inheritance
+
+You can use inheritance with anonymous fixtures in tests:
+
+```ruby
+RSpec.describe "Inline inheritance" do
+  fixture(extends: "inheritance/base") do
+    project = Project.create!(name: "Inline Project", owner: parent.owner)
+    expose(project: project)
+  end
+
+  it "extends named fixtures inline" do
+    expect(User.count).to eq(1)      # From parent
+    expect(Project.count).to eq(1)   # From inline fixture
+    expect(fixture.project.owner.email).to eq("inheritance.owner@example.com")
+  end
+end
+```
+
+This is useful for:
+- Test-specific variations of named fixtures
+- Prototyping before extracting to named fixtures
+- One-off scenarios that build on shared base data
+
+## Overriding vs Extending
+
+### Extending Parent Data
+
+Child fixtures **add** to parent data:
+
+```ruby
+# Parent: 1 user
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")
+  expose(alice: alice)
+end
+
+# Child: parent's 1 user + 1 new project
+FixtureKit.define(extends: "parent") do
+  project = Project.create!(name: "New Project", owner: parent.alice)
+  expose(project: project)
+end
+
+# Result: 1 user, 1 project
+```
+
+### Child Records Can Reference Parent Records
+
+```ruby
+FixtureKit.define(extends: "teams/basic") do
+  # Create new records that reference parent records
+  project = Project.create!(name: "Team Project", owner: parent.alice)
+
+  # Assign tasks to parent users
+  alice_task = Task.create!(title: "Alice's Task", project: project, assignee: parent.alice)
+  bob_task = Task.create!(title: "Bob's Task", project: project, assignee: parent.bob)
+
+  expose(
+    project: project,
+    alice_task: alice_task,
+    bob_task: bob_task
+  )
+end
+```
+
+## Circular Inheritance Detection
+
+<Warning>
+FixtureKit detects and prevents circular inheritance chains. Attempting to create a circular dependency will raise a `FixtureKit::CircularFixtureInheritance` error.
+</Warning>
+
+```ruby
+# spec/fixture_kit/circular_a.rb
+FixtureKit.define(extends: "circular_b") do
+  expose(a: User.create!(name: "A", email: "a@example.com"))
+end
+
+# spec/fixture_kit/circular_b.rb
+FixtureKit.define(extends: "circular_a") do
+  expose(b: User.create!(name: "B", email: "b@example.com"))
+end
+```
+
+Attempting to use either fixture:
+
+```ruby
+fixture "circular_a"
+
+# Raises:
+# FixtureKit::CircularFixtureInheritance:
+#   circular fixture inheritance detected: circular_a -> circular_b -> circular_a
+```
+
+The error message shows the complete circular chain to help you identify the issue.
+
+## Generation Order
+
+Parent fixtures are always generated before their children:
+
+<Steps>
+  <Step title="Parent fixture generates">
+    The parent fixture's definition block executes and its data is cached
+  </Step>
+
+  <Step title="Parent cache saved">
+    All records from the parent fixture are written to the cache file
+  </Step>
+
+  <Step title="Child fixture generates">
+    The child fixture's definition block executes with access to `parent` records
+  </Step>
+
+  <Step title="Child cache saved">
+    All records (parent + child) are written to the child's cache file
+  </Step>
+</Steps>
+
+This ensures parent data is always available when the child fixture runs.
+
+## Use Cases
+
+### Building Test Scenarios Incrementally
+
+```ruby
+# Base: Just users
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com", role: "admin")
+  bob = User.create!(name: "Bob", email: "bob@example.com", role: "member")
+  expose(alice: alice, bob: bob)
+end
+
+# Add projects
+FixtureKit.define(extends: "base_users") do
+  project = Project.create!(name: "Web App", owner: parent.alice)
+  expose(project: project)
+end
+
+# Add tasks
+FixtureKit.define(extends: "base_with_project") do
+  task1 = Task.create!(title: "Task 1", project: parent.project, assignee: parent.alice)
+  task2 = Task.create!(title: "Task 2", project: parent.project, assignee: parent.bob)
+  expose(task1: task1, task2: task2)
+end
+```
+
+### Reducing Duplication
+
+Instead of duplicating user creation across fixtures:
+
+```ruby
+# Without inheritance (duplicated)
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")
+  project = Project.create!(name: "Project A", owner: alice)
+  expose(alice: alice, project: project)
+end
+
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")  # Duplicated!
+  task = Task.create!(title: "Task", assignee: alice)
+  expose(alice: alice, task: task)
+end
+```
+
+With inheritance:
+
+```ruby
+# Base fixture
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")
+  expose(alice: alice)
+end
+
+# Reuse in multiple child fixtures
+FixtureKit.define(extends: "base_user") do
+  project = Project.create!(name: "Project A", owner: parent.alice)
+  expose(project: project)
+end
+
+FixtureKit.define(extends: "base_user") do
+  task = Task.create!(title: "Task", assignee: parent.alice)
+  expose(task: task)
+end
+```
+
+### Testing Feature Combinations
+
+```ruby
+# Base: Active project
+FixtureKit.define do
+  alice = User.create!(name: "Alice", email: "alice@example.com")
+  project = Project.create!(name: "Web App", owner: alice, status: "active")
+  expose(alice: alice, project: project)
+end
+
+# Add: Comments
+FixtureKit.define(extends: "active_project") do
+  comment = Comment.create!(body: "Great progress!", commentable: parent.project)
+  expose(comment: comment)
+end
+
+# Add: Tasks
+FixtureKit.define(extends: "active_project") do
+  task = Task.create!(title: "Deploy", project: parent.project)
+  expose(task: task)
+end
+
+# Add: Both comments and tasks
+FixtureKit.define(extends: "active_project") do
+  comment = Comment.create!(body: "Great progress!", commentable: parent.project)
+  task = Task.create!(title: "Deploy", project: parent.project)
+  expose(comment: comment, task: task)
+end
+```
+
+## Best Practices
+
+<Note>
+- Use inheritance to build on shared base data
+- Keep inheritance chains shallow (2-3 levels max) for clarity
+- Create focused base fixtures that serve as building blocks
+- Document inheritance relationships in comments
+- Use descriptive names that indicate the inheritance hierarchy
+- Remember that parent records must be accessed via associations unless explicitly re-exposed
+</Note>
+
+## Troubleshooting
+
+### Parent Record Not Available
+
+If you get a `NoMethodError` when accessing `parent.something`:
+
+1. Check that the parent fixture exposes the record:
+   ```ruby
+   expose(something: something)  # Must be in parent fixture
+   ```
+
+2. Verify the parent fixture name is correct:
+   ```ruby
+   FixtureKit.define(extends: "correct/path/to/parent") do
+     # ...
+   end
+   ```
+
+### Circular Inheritance
+
+If you get `CircularFixtureInheritance` error:
+
+1. Check the error message for the circular chain
+2. Remove the circular dependency by restructuring your fixtures
+3. Consider creating a shared base fixture that both depend on:
+
+   ```ruby
+   # Instead of A -> B -> A
+   # Use: A -> Base, B -> Base
+   ```
