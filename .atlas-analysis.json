@@ -1,0 +1,69 @@
+{
+  "projectType": "sdk-library",
+  "projectName": "FixtureKit",
+  "projectDescription": "Lightning-fast test fixtures with SQL caching for Rails applications",
+  "theme": "palm",
+  "primaryColor": "#4F46E5",
+  "lightColor": "#818CF8",
+  "darkColor": "#3730A3",
+  "navigation": {
+    "groups": [
+      {
+        "group": "Get Started",
+        "pages": [
+          "introduction",
+          "installation",
+          "quickstart"
+        ]
+      },
+      {
+        "group": "Guides",
+        "pages": [
+          "guides/rspec",
+          "guides/minitest",
+          "guides/defining-fixtures",
+          "guides/fixture-inheritance",
+          "guides/configuration",
+          "guides/callbacks"
+        ]
+      },
+      {
+        "group": "API Reference",
+        "pages": [
+          "api/define",
+          "api/repository",
+          "api/configuration",
+          "api/adapters",
+          "api/errors"
+        ]
+      },
+      {
+        "group": "Advanced",
+        "pages": [
+          "advanced/analyzer",
+          "advanced/caching",
+          "advanced/performance",
+          "advanced/troubleshooting"
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "SQL caching for fixture data",
+    "RSpec and Minitest framework support",
+    "FactoryBot-style test setup with fixture-level performance",
+    "Built-in performance analyzer",
+    "Fixture inheritance support",
+    "Lifecycle callbacks"
+  ],
+  "publicApiSurface": [
+    "FixtureKit.define",
+    "FixtureKit.configure",
+    "Definition#expose",
+    "fixture macro (RSpec/Minitest)",
+    "Repository (fixture accessor)",
+    "Configuration API",
+    "Adapter contract",
+    "Analyzer tool"
+  ]
+}
